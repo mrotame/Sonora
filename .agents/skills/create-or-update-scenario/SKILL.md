@@ -38,7 +38,7 @@ missing information is necessary to proceed reliably.
 - **Default:** None.
 - **Behavior:** Determines the main workflow executed by the skill.
 
-### 3. scenario_name
+### 2. scenario_name
 
 - **Required:** No
 - **Type:** string
@@ -48,7 +48,7 @@ missing information is necessary to proceed reliably.
   identity is unclear.
 - **Behavior:** Defines the display name of the scenario.
 
-### 4. scenario_description
+### 3. scenario_description
 
 - **Required:** Conditional
 - **Type:** string
@@ -58,7 +58,7 @@ missing information is necessary to proceed reliably.
   environment, and experience. Required for `create` unless the user has
   already established these details in the conversation.
 
-### 5. visual_references
+### 4. visual_references
 
 - **Required:** No
 - **Type:** array of strings
@@ -69,7 +69,7 @@ missing information is necessary to proceed reliably.
   References are inspirational constraints, not permission to disregard
   Sonora's architecture or technical limitations.
 
-### 6. musical_mapping_strategy
+### 5. musical_mapping_strategy
 
 - **Required:** No
 - **Type:** string
@@ -82,7 +82,7 @@ missing information is necessary to proceed reliably.
 - **Behavior:** Determines how musical features are associated with visual
   properties. It must never impose universal mappings across all scenarios.
 
-### 7. visual_complexity
+### 6. visual_complexity
 
 - **Required:** No
 - **Type:** string
@@ -98,7 +98,7 @@ missing information is necessary to proceed reliably.
   implementation and performance decisions. It does not override runtime
   performance requirements.
 
-### 8. implementation_scope
+### 7. implementation_scope
 
 - **Required:** No
 - **Type:** string
@@ -110,7 +110,7 @@ missing information is necessary to proceed reliably.
 - **Default:** `full`.
 - **Behavior:** Defines how much implementation work should be performed.
 
-### 9. additional_constraints
+### 8. additional_constraints
 
 - **Required:** No
 - **Type:** array of strings
@@ -184,18 +184,14 @@ Não pergunte novamente informações que já estejam disponíveis.
 
 - `visual_complexity`
   - Nível de complexidade visual desejado.
-  - Opções sugeridas:
-    - `low`
-    - `medium`
-    - `high`
-    - `adaptive`
-  - Se não informado, propor um nível compatível com a identidade visual e o orçamento de desempenho.
+  - Valores: `low`, `medium`, `high`, `very_high` (mesmos do cabeçalho da skill).
+  - Se não informado, usar `medium`.
 
 - `implementation_scope`
-  - `visual_design`: definir identidade e comportamento visual.
-  - `scenario_architecture`: definir estrutura e contratos do cenário.
-  - `implementation`: implementar o cenário.
-  - `full`: realizar o processo completo.
+  - `documentation`: definir ou atualizar apenas a especificação do cenário.
+  - `prototype`: produzir uma primeira implementação funcional.
+  - `full`: implementar o cenário completo (padrão).
+  - `incremental`: implementar apenas a parte explicitamente solicitada.
 
 - `additional_constraints`
   - Restrições específicas fornecidas pelo usuário.
@@ -511,6 +507,54 @@ A implementação deve considerar:
 
 Não adicionar complexidade de otimização sem necessidade comprovada.
 
+## 3.13 Estrutura de todo cenário: assinatura e grupos visuais
+
+O **conteúdo** de cada cenário é livre (seção 3.4), mas a **estrutura** é fixa:
+todo cenário é composto por uma **assinatura** e por **grupos visuais**.
+O cenário Synthwave (`src/scenarios/synthwave/`) é a implementação de
+referência desta estrutura (ver seção 12). Ele ilustra a estrutura e o nível de
+acabamento esperados, não o conteúdo: nenhum mapeamento dele é regra para outros
+cenários.
+
+### Assinatura do cenário
+
+- Cada cenário tem **uma** característica central que o define e que é afetada
+  pela música de um jeito próprio. No Synthwave é a estrada: subir, descer e
+  variar de velocidade.
+- A assinatura é **estrutural e lenta**: deriva da pré-análise (timeline
+  inteira), é determinística e time-addressable, e pertence à geração
+  (`createPath`, `generateSegment`), nunca a um pulso ao vivo.
+- A assinatura é específica do cenário. Outro cenário pode não ter estrada,
+  subidas, descidas ou montanhas. Não copiar a assinatura de um cenário
+  existente; propor uma característica que faça sentido para a nova identidade
+  (por exemplo: a água de um oceano, a densidade de um corredor, a gravidade de
+  plataformas flutuantes).
+- A assinatura deve ser reconhecível só pelo movimento, mesmo sem ver as cores.
+
+### Grupos visuais
+
+- O mundo é dividido em **grupos visuais** distintos e identificáveis (no
+  Synthwave: estrada, montanhas, chão/grade, céu, estrelas, brasas, cidade).
+- Cada grupo reage a **uma característica principal** do áudio (seu *driver*),
+  escolhida pelo que a característica representa musicalmente e por como o
+  grupo se comporta visualmente. Exemplo no Synthwave: o tamanho das montanhas
+  segue a energia da faixa; a estrada segue a intensidade.
+- Grupos diferentes devem ter drivers diferentes, ou a mesma feature em escalas
+  de tempo diferentes (estrutural/baked vs. pulso ao vivo). Se todos os grupos
+  reagem à mesma feature, o cenário vira um visualizador de áudio convencional.
+- Um grupo pode ter drivers secundários (as estrelas do Synthwave têm três
+  populações, uma por banda), desde que o driver principal esteja explícito e a
+  combinação siga a seção 4.6.
+- Todo cenário também tem elementos **independentes da música** (vida ambiental,
+  como as janelas do Synthwave em relógio próprio): a música modula o grupo, não
+  é a única fonte de movimento.
+- Cada grupo é isolado no código: material/mesh/uniforms próprios na cena, e
+  campos próprios, agrupados e comentados, nos `Params` da lógica. Alterar um
+  grupo não deve exigir tocar nos outros.
+- Separar, em cada grupo, o que é **baked** (decidido na geração a partir da
+  timeline: forma, tamanho, altura) do que é **ao vivo** (pulso, brilho,
+  densidade calculados por `interpret`), conforme a seção 3.7.
+
 ---
 
 # 4. Configurações dinâmicas de cada cenário
@@ -809,9 +853,9 @@ Quando `operation=create`, seguir a sequência abaixo.
 
 Antes de implementar:
 
-1. Ler `PRODUCT_SPEC.md`.
-2. Ler `TECH_STACK.md`.
-3. Ler `TECHNICAL_ARCHITECTURE.md`.
+1. Ler `PRODUCT_SPEC.md` (em `docs/`).
+2. Ler `TECH_STACK.md` (em `docs/`).
+3. Ler `TECHNICAL_ARCHITECTURE.md` (em `docs/`).
 4. Consultar as instruções de desenvolvimento do repositório, como `AGENTS.md`, quando disponíveis.
 5. Inspecionar a estrutura atual do código.
 6. Identificar cenários já existentes.
@@ -841,6 +885,35 @@ Com as informações disponíveis, produzir uma proposta contendo:
 Se o usuário já forneceu referências suficientes, não perguntar novamente.
 
 Se faltar uma decisão que altere substancialmente a identidade visual, perguntar antes de implementar.
+
+## Etapa 2.1 — Definir a assinatura e os grupos visuais (portão de aprovação)
+
+Esta etapa é obrigatória e vem **antes de escrever código**. Aplicar a seção
+3.13.
+
+1. Ler as features realmente disponíveis em `TRACK_NAMES`
+   (`src/audio/intelligence/timeline.ts`) e o que a pré-análise já oferece
+   (por exemplo `timeline.evaluate`, `musicEndFrame`). Não propor uma feature
+   que não exista; se for necessária, propor a extensão do sistema compartilhado.
+2. Propor a **assinatura** do cenário: qual característica é central, qual
+   feature/intensidade musical a controla, e como isso aparece na geração
+   (path, forma do terreno, densidade, etc.).
+3. Propor a lista de **grupos visuais**, em uma tabela:
+
+   | Grupo | Papel visual | Driver principal | Baked ou ao vivo | Elementos independentes da música |
+   |---|---|---|---|---|
+
+4. Verificar que a assinatura e os grupos não repetem o mesmo driver sem motivo
+   e que existe pelo menos um grupo de fundo, um de meio e um próximo à câmera
+   (profundidade).
+5. Marcar tudo como `PROPOSED` e **pedir validação do usuário** (estratégia
+   `hybrid`) antes de implementar. Em `user_guided`, usar os grupos e drivers
+   que o usuário informar. Em `scenario_defined`, seguir sem perguntar, mas
+   registrar a tabela na entrega.
+
+Não implementar um cenário "básico" para o usuário refinar depois. A primeira
+entrega deve já ter a assinatura e todos os grupos aprovados, com o acabamento
+descrito na seção 12.
 
 ## Etapa 3 — Definir composição do mundo
 
@@ -950,6 +1023,25 @@ Não duplicar sistemas compartilhados.
 
 Não alterar outros cenários sem necessidade.
 
+Organização obrigatória do código (seguindo `src/scenarios/synthwave/`):
+
+- `logic.ts` (puro, sem Three.js nem DOM): constantes tipadas do cenário,
+  interface do segmento, interface `Params` com os campos **agrupados por
+  grupo visual e comentados** com o driver de cada um, `interpret` organizado na
+  mesma ordem dos grupos, `generateSegment` e, quando a assinatura exigir, o
+  `createPath` ou equivalente.
+- Arquivos puros adicionais (como `path.ts`) para a assinatura quando ela for
+  complexa. Nada de aleatoriedade fora de `deriveSeed`/`rand`/`rand2`.
+- `scene.ts` (Three.js, thread principal): um material/mesh por grupo, uniforms
+  atualizados por grupo em `update`, descarte completo em `dispose`.
+- Registro em `registry.ts` (cena) e `logics.ts` (lógica para o Worker).
+- Comentário de histórico de versões ao lado de `version` em `logic.ts`,
+  descrevendo cada mudança que altera o mundo gerado.
+
+Acabamento esperado (ver seção 12): continuidade de distância (LOD/campo
+distante quando a vista for longa), neblina na mesma cor do céu, vida ambiental
+independente da música e animação por tempo da faixa em vez de estado por frame.
+
 ## Etapa 10 — Validar
 
 Executar as verificações possíveis:
@@ -965,6 +1057,9 @@ Executar as verificações possíveis:
 - Limites visuais.
 - Descarte de recursos.
 - Desempenho.
+
+- Cada grupo visual reage ao seu driver (sem depender de outro grupo).
+- A assinatura é determinística e time-addressable (mesmo `t`, mesmo resultado).
 
 Não afirmar que uma validação foi executada se ela não foi realmente realizada.
 
@@ -1030,6 +1125,11 @@ Classificar a solicitação em uma ou mais categorias:
 - Desempenho.
 - Arquitetura.
 - Correção de bugs.
+- Assinatura do cenário.
+- Grupos visuais (novo grupo, remoção ou troca de driver).
+
+Ao adicionar ou alterar um grupo, aplicar a seção 3.13: driver explícito,
+isolamento no código e distinção entre baked e ao vivo.
 
 ## 6.3 Preservar o que não foi solicitado
 
@@ -1069,6 +1169,11 @@ A versão deve refletir mudanças relevantes para a identidade e reprodução do
 Não atualizar versões automaticamente para qualquer ajuste cosmético sem avaliar as regras de versionamento existentes.
 
 Se a estratégia de versionamento ainda não estiver definida, registrar a decisão como `OPEN` ou `PROPOSED`.
+
+Na prática do projeto, o número em `version` (em `logic.ts`) sobe a cada mudança
+que altera o mundo gerado (terreno, path, layout de segmentos), e cada subida
+recebe uma linha de comentário explicando a mudança. Mudanças só em `interpret`
+ou em shaders (visual ao vivo) não alteram o mundo gerado.
 
 ---
 
@@ -1212,6 +1317,14 @@ Um cenário só deve ser considerado pronto quando atender aos critérios aplic�
 - Evita shaders desnecessariamente caros.
 - Libera recursos corretamente.
 
+## Assinatura e grupos
+
+- Existe uma assinatura clara, estrutural e determinística.
+- O mundo está dividido em grupos visuais, cada um com driver principal explícito.
+- Grupos não compartilham o mesmo driver sem justificativa.
+- Há elementos independentes da música.
+- Há profundidade (fundo, meio, próximo) e continuidade até o horizonte.
+
 ## Manutenibilidade
 
 - Possui responsabilidades bem separadas.
@@ -1302,3 +1415,62 @@ Cada cenário define:
 A IA deve preservar essa separação em todas as decisões de design e implementação.
 
 **O objetivo não é fazer todos os cenários reagirem à música da mesma forma. O objetivo é permitir que todos utilizem a mesma infraestrutura para criar experiências visuais diferentes.**
+
+---
+
+# 12. Cenário de referência: Synthwave Dimension
+
+Antes de criar ou atualizar um cenário, **ler** `src/scenarios/synthwave/logic.ts`,
+`path.ts` e `scene.ts`. Eles definem o nível de estrutura e acabamento esperado.
+O que vale reproduzir é o **método**, não o conteúdo (seção 3.4): estrada,
+montanhas, cidade e sol são escolhas do Synthwave.
+
+## 12.1 Assinatura do Synthwave
+
+A estrada sobe, desce e muda de velocidade, seguindo a intensidade da música
+(`createTrackPath`): intensidade = loudness + flux, suavizada; inclinação vem da
+intensidade absoluta e do contraste com os ~20 s ao redor; velocidade segue a
+intensidade e a inclinação; a altura é a integral da inclinação; finais calmos
+achatam a estrada. Tudo é função pura da timeline, avaliada por tempo da faixa.
+
+## 12.2 Grupos do Synthwave (exemplo de tabela da etapa 2.1)
+
+| Grupo | Driver principal | Baked / ao vivo |
+|---|---|---|
+| Estrada | intensidade (loudness + flux) | baked (path) |
+| Montanhas | energia (altura via `amplitudeAt`) + `bass` (pulso) | baked + ao vivo |
+| Chão e grade | `bass` + `energy` (brilho) | ao vivo |
+| Céu e sol | `bass` (tamanho), `energy` (brilho), `flux` (flash) | ao vivo |
+| Estrelas | `bass`, `mid`, `high` (três populações) | ao vivo |
+| Brasas | `energy` (densidade), `mid` + `flux` (brilho) | ao vivo |
+| Cidade (anel de horizonte) | `bass` + `energy` (brilho), `energy` (janelas), `high` + `flux` (faróis) | ao vivo |
+
+## 12.3 O que tornou o Synthwave completo (usar como checklist de acabamento)
+
+Adaptar cada item à identidade do novo cenário; um item só é dispensado quando
+não faz sentido para ele, e a dispensa deve ser explicada na entrega.
+
+- Camadas de distância: segmentos detalhados perto e **campo distante** (LOD,
+  `farField`) com transição por dither sem emenda; `viewDistance` cobre o campo
+  distante.
+- **Anel de horizonte** ancorado na altura do chão à frente (não flutua), com
+  planície, silhueta distante e fundo.
+- **Crescimento por proximidade**: elementos nascem pequenos ao longe e chegam ao
+  tamanho final perto da câmera (função pura da distância).
+- **Neblina na cor do céu** (mesma função de cor), sem borda visível no fim do
+  mundo carregado.
+- **Vida ambiental independente da música**, time-addressable (janelas em relógio
+  próprio, brasas com queda e balanço por tempo da faixa); a música só modula.
+- **Variação por mundo** via `worldSalt`/seeds derivadas, sem `Math.random`.
+- Geometria reutilizada: instancing e atributos de índice compartilhados;
+  `dispose` libera geometrias e materiais.
+- `Params` agrupados por grupo e comentados; `interpret` na mesma ordem.
+- Final da faixa tratado (calma/epílogo) quando a assinatura depende do tempo.
+- Histórico de versões comentado em `version`.
+
+## 12.4 Limites desta referência
+
+- Nenhum mapeamento do Synthwave (por exemplo `bass` → sol) é obrigatório em
+  outro cenário.
+- Se o Synthwave for modificado, esta seção deve ser atualizada para continuar
+  descrevendo o código real. Não alterar o Synthwave ao criar outro cenário.
