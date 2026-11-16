@@ -1,0 +1,68 @@
+<!doctype html>
+<meta charset="utf-8"><title>Sonora spike</title>
+<body style="font:14px monospace;background:#111;color:#ddd">
+<label>arquivo: <input id="f" value="m-fGKtGk8wc.m4a" size="30"></label>
+<button id="go">rodar</button> <span id="st"></span>
+<pre id="out"></pre>
+<script>
+const out = document.getElementById('out');
+const log = (s) => { out.textContent += s + '\n'; };
+const hex = (b) => [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, '0')).join('');
+const heap = () => (performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null);
+
+let dumpTag = null;
+async function runOnce(name) {
+  const r = {};
+  let t = performance.now();
+  const resp = await fetch('/audio?f=' + encodeURIComponent(name));
+  if (!resp.ok) throw new Error('fetch ' + resp.status);
+  const bytes = await resp.arrayBuffer();
+  r.fetchMs = Math.round(performance.now() - t); r.fileBytes = bytes.byteLength;
+
+  // ADR 0006: decodeAudioData num OfflineAudioContext a 44100 Hz.
+  // Comprimento 1 frame: o contexto so serve para decodificar.
+  t = performance.now();
+  const ctx = new OfflineAudioContext(2, 1, 44100);
+  const buf = await ctx.decodeAudioData(bytes);
+  r.decodeMs = Math.round(performance.now() - t);
+  r.sampleRate = buf.sampleRate; r.channels = buf.numberOfChannels;
+  r.frames = buf.length; r.durationS = +buf.duration.toFixed(3);
+
+  // Interleave L,R,L,R... Float32 (mono -> duplica). Plataforma little-endian assertada.
+  if (new Uint8Array(new Uint16Array([1]).buffer)[0] !== 1) throw new Error('big-endian');
+  t = performance.now();
+  const L = buf.getChannelData(0);
+  const R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L;
+  const pcm = new Float32Array(buf.length * 2);
+  for (let i = 0, j = 0; i < buf.length; i++) { pcm[j++] = L[i]; pcm[j++] = R[i]; }
+  r.interleaveMs = Math.round(performance.now() - t);
+  r.pcmMiB = +(pcm.byteLength / 1048576).toFixed(1);
+
+  t = performance.now();
+  r.sha256 = hex(await crypto.subtle.digest('SHA-256', pcm));
+  r.hashMs = Math.round(performance.now() - t);
+  if (dumpTag) await fetch('/pcm?tag=' + dumpTag, { method: 'POST', body: pcm });
+  r.heapMiB = heap();
+  return r;
+}
+
+async function main(name, runs = 2) {
+  const result = { ua: navigator.userAgent, file: name, deviceMemoryGB: navigator.deviceMemory ?? null, secure: isSecureContext };
+  try {
+    result.runs = runs;
+    result.run1 = await runOnce(name);
+    if (runs > 1) { // reprodutibilidade no mesmo ambiente
+      result.run2 = await runOnce(name);
+      result.sameHash = result.run1.sha256 === result.run2.sha256;
+    }
+  } catch (e) { result.error = String(e); }
+  const s = JSON.stringify(result, null, 1);
+  log(s);
+  navigator.sendBeacon('/report', JSON.stringify(result));
+  document.title = 'DONE';
+}
+document.getElementById('go').onclick = () => main(document.getElementById('f').value);
+const q = new URLSearchParams(location.search);
+dumpTag = q.get('dump');
+if (q.get('f')) { document.getElementById('f').value = q.get('f'); if (q.get('auto')) main(q.get('f'), Number(q.get('runs') ?? 2)); }
+</script>
