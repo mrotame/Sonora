@@ -87,8 +87,11 @@ export interface ScenarioLogic<Params, Segment> {
   id: string;
   version: number;
   config: ScenarioConfig;
-  /** Opt-in: music-driven camera speed and road elevation. Absent = constant speed on a flat road. */
-  createPath?(timeline: Timeline): TrackPath;
+  /**
+   * Opt-in: music-driven camera speed and road elevation. Absent = constant speed on a flat road. A scenario whose road
+   * follows its terrain (bridges) also receives the world seed; others ignore it.
+   */
+  createPath?(timeline: Timeline, worldSeed?: Seed): TrackPath;
   /** Pure mapping from timeline features at time t to visual parameters. */
   interpret(features: Features, seed: Seed): Params;
   /** Pure function of its input: the same input always yields the same segment. */

@@ -81,7 +81,7 @@ export class Experience {
     this.renderer.setClearColor(this.sceneImpl.background);
 
     // Optional scenario-owned path (variable speed and road elevation); built from the same timeline as in the Worker.
-    this.path = definition.logic.createPath?.(opts.timeline);
+    this.path = definition.logic.createPath?.(opts.timeline, worldSeed);
     if (this.path && opts.speedGraphCanvas && definition.logic.config.speedGraph !== false) {
       this.speedGraph = new SpeedGraph(opts.speedGraphCanvas, this.path, opts.timeline.durationS);
     }

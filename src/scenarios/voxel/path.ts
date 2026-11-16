@@ -1,5 +1,5 @@
 // Voxel Dreamscape: music-driven camera pace (pure, no Three.js, no DOM).
-// The camera glides on a flat river (no climbs or descents); only its speed and field of view follow the music:
+// The camera follows a straight road at a fixed height (it only rises over bridges); its speed and field of view follow the music:
 //   - Intensity (log loudness + spectral flux), smoothed over about 1.5 s with a centered (zero-lag) filter and
 //     scaled between the song's 2nd and 98th percentile.
 //   - Speed is set in log space around a cruise speed by how intense the moment is against the song's median, and
@@ -10,7 +10,11 @@
 // (`islandIntensityAt`). Everything is a pure function of the timeline, evaluated by track time.
 // Same speed scale as Synthwave Dimension (cruise 280 km/h, 100..600 km/h), as requested by the user.
 import type { Timeline } from '../../audio/intelligence/timeline.ts';
+import type { Seed } from '../../world/identity/seed.ts';
 import type { TrackPath } from '../types.ts';
+import { bridgeOffsetAt, bridgeSlopeAt } from './road.ts';
+import { scheduleOf } from './schedule.ts';
+import { saltsFor } from './terrain.ts';
 
 export const PACE = {
   /** Speed range and cruise speed in km/h (1 world unit = 1 m). */
@@ -39,6 +43,24 @@ export const PACE = {
 } as const;
 
 const KMH_TO_UNITS_PER_S = 1 / 3.6;
+
+/**
+ * Nether leg (Synthwave-like descent, implemented here so scenarios stay independent): the minecart drops along the
+ * rails, steeper and faster the more intense the music is; a calm moment levels out or even climbs a little.
+ */
+export const NETHER_PATH = {
+  /** Road slope (rise over run) at the calmest and at the most intense moment (negative = descending). */
+  calmSlope: 0.06,
+  steepSlope: -0.55,
+  /** Intensity range mapped to the slope. */
+  steepFrom: 0.15,
+  steepTo: 0.85,
+  /** Time constant (s) of the slope following its target, and the ramp-in after the entry portal. */
+  followTauS: 0.7,
+  rampInS: 1.5,
+  /** ln(speed) gained at the steepest descent. */
+  speedGain: 0.5,
+} as const;
 
 /** Running mean over [i - r, i + r], clamped at the ends (prefix sums, O(n)). Centered, so it adds no lag. */
 function boxBlur(src: Float64Array, r: number): Float64Array {
@@ -136,7 +158,8 @@ export function fovForSpeed(v: number): number {
   return PACE.fovDeg[0] + (PACE.fovDeg[1] - PACE.fovDeg[0]) * u;
 }
 
-export function createVoxelPath(timeline: Timeline): TrackPath {
+export function createVoxelPath(timeline: Timeline, worldSeed?: Seed): TrackPath {
+  const salts = worldSeed ? saltsFor(worldSeed) : null;
   const { rate } = timeline.data;
   const intensity = intensityCurves(timeline).detail;
   const frames = intensity.length;
@@ -150,14 +173,29 @@ export function createVoxelPath(timeline: Timeline): TrackPath {
   const lnEnd = Math.log(PACE.endKmh * KMH_TO_UNITS_PER_S);
   const k = 1 - Math.exp(-1 / (PACE.followTauS * rate));
 
+  const intervals = salts ? scheduleOf(timeline).intervals : [];
+  const kSlope = 1 - Math.exp(-1 / (NETHER_PATH.followTauS * rate));
   const speed = new Float64Array(n);
   const dist = new Float64Array(n);
   const fov = new Float64Array(n);
+  /** Nether leg: slope and accumulated drop (m) below the road; both 0 in the overworld. */
+  const slope = new Float64Array(n);
+  const drop = new Float64Array(n);
   let lnV = lnCruise;
   for (let i = 0; i < n; i++) {
     const t = i / rate;
     const x = intensity[Math.min(i, frames - 1)]!;
-    const lnMusic = Math.min(Math.log(vMax), Math.max(Math.log(vMin), lnCruise + PACE.intensityGain * (x - pivot)));
+    let lnMusic = Math.min(Math.log(vMax), Math.max(Math.log(vMin), lnCruise + PACE.intensityGain * (x - pivot)));
+    const iv = intervals.find((v) => t >= v.t0 && t < v.t1);
+    if (iv) {
+      const steep = smoothstep(NETHER_PATH.steepFrom, NETHER_PATH.steepTo, x);
+      const target = (NETHER_PATH.calmSlope + (NETHER_PATH.steepSlope - NETHER_PATH.calmSlope) * steep) * smoothstep(iv.t0, iv.t0 + NETHER_PATH.rampInS, t);
+      const continuing = i > 0 && t - 1 / rate >= iv.t0; // not the first sample of the leg
+      const before = continuing ? slope[i - 1]! : 0;
+      slope[i] = before + (target - before) * kSlope;
+      drop[i] = continuing ? drop[i - 1]! + (slope[i - 1]! * speed[i - 1]!) / rate : 0;
+      lnMusic = Math.min(Math.log(vMax), lnMusic + NETHER_PATH.speedGain * Math.max(0, -slope[i]!) / -NETHER_PATH.steepSlope);
+    }
     lnV = i === 0 ? lnMusic : lnV + (lnMusic - lnV) * k;
     // The epilogue blend comes after the smoothing, so the end speed is reached exactly `endSlowS` after the music.
     const ending = smoothstep(tMusicEnd, tMusicEnd + PACE.endSlowS, t);
@@ -192,8 +230,18 @@ export function createVoxelPath(timeline: Timeline): TrackPath {
   return {
     distanceAt,
     timeAt,
-    heightAt: () => 0, // the river is flat
-    slopeAt: () => 0,
+    // The road is flat except over bridges, where it rises and falls with the arch, and in the Nether, where it
+    // descends (the same profiles the segments build). Leaving the Nether jumps back to the road: the portal flash hides it.
+    heightAt: (t: number) => {
+      if (!salts) return 0;
+      if (intervals.some((v) => t >= v.t0 && t < v.t1)) return sample(drop, t * rate);
+      return bridgeOffsetAt(salts, distanceAt(t));
+    },
+    slopeAt: (t: number) => {
+      if (!salts) return 0;
+      if (intervals.some((v) => t >= v.t0 && t < v.t1)) return sample(slope, t * rate);
+      return bridgeSlopeAt(salts, distanceAt(t));
+    },
     fovAt: (t: number) => (n > 0 ? sample(fov, t * rate) : fovForSpeed(v0)),
   };
 }

@@ -18,10 +18,18 @@ let timeline: Timeline | null = null;
 let worldSeed: Seed | null = null;
 let path: TrackPath | undefined;
 
-/** Typed arrays at the top level of a segment are moved, not copied. */
+/** Typed arrays at the top level of a segment, or one level down inside plain objects, are moved, not copied. */
 function transferablesOf(segment: unknown): Transferable[] {
-  if (typeof segment !== 'object' || segment === null) return [];
-  return Object.values(segment).filter((v): v is Float32Array => v instanceof Float32Array).map((v) => v.buffer);
+  const buffers = new Set<ArrayBuffer>();
+  const visit = (value: unknown, depth: number): void => {
+    if (ArrayBuffer.isView(value)) {
+      if (value.buffer instanceof ArrayBuffer) buffers.add(value.buffer);
+    } else if (depth < 2 && typeof value === 'object' && value !== null && !Array.isArray(value)) {
+      for (const v of Object.values(value)) visit(v, depth + 1);
+    }
+  };
+  visit(segment, 0);
+  return [...buffers];
 }
 
 function init(req: Extract<WorkerRequest, { type: 'init' }>): void {
@@ -38,7 +46,7 @@ function init(req: Extract<WorkerRequest, { type: 'init' }>): void {
     }
   });
   timeline = new Timeline(data);
-  path = found.createPath?.(timeline);
+  path = found.createPath?.(timeline, req.worldSeed);
 
   // The main thread gets its own copy of the tracks; the Worker keeps the originals for generation.
   const copy: TimelineData = {
