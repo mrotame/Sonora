@@ -14,6 +14,7 @@ export type ErrorCode =
   | 'DOWNLOAD_FAILED' // any other acquisition failure
   | 'BUSY' // queue is full
   | 'RATE_LIMITED' // too many requests from this client
+  | 'QUOTA_EXCEEDED' // the service-wide daily/monthly quota is used up
   | 'NOT_FOUND'; // unknown or already delivered job
 
 export interface CreateJobRequest {

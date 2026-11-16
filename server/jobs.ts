@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { ErrorCode, JobResponse, JobStatus } from '../shared/contract.ts';
 import { config } from './config.ts';
+import { Breaker } from './limits.ts';
 import { withRetry } from './retry.ts';
 import { downloadAudio, fetchMetadata, SourceError } from './ytdlp.ts';
 
@@ -15,11 +16,25 @@ interface Job {
   filePath?: string;
   abort: AbortController;
   expiry?: NodeJS.Timeout;
+  owner: string;
+  serves: number;
 }
 
 const jobs = new Map<string, Job>();
 const queue: Job[] = [];
 let running = 0;
+
+/** Stops hitting the source after repeated blocks (see limits.ts). */
+export const breaker = new Breaker(config.breakerThreshold, config.breakerPauseMs);
+
+/** Jobs of a client that are still being prepared (queued or running). */
+export function activeJobs(owner: string): number {
+  let n = 0;
+  for (const job of jobs.values()) {
+    if (job.owner === owner && (job.status === 'queued' || job.status === 'fetching_metadata' || job.status === 'downloading')) n++;
+  }
+  return n;
+}
 
 /** Startup cleanup: removes orphaned files from a previous run. */
 export function initStorage(): void {
@@ -28,9 +43,9 @@ export function initStorage(): void {
 }
 
 /** Returns the job id, or undefined when the queue is full. */
-export function createJob(videoId: string): string | undefined {
+export function createJob(videoId: string, owner: string): string | undefined {
   if (queue.length >= config.maxQueuedJobs) return undefined;
-  const job: Job = { id: randomUUID(), videoId, status: 'queued', abort: new AbortController() };
+  const job: Job = { id: randomUUID(), videoId, status: 'queued', abort: new AbortController(), owner, serves: 0 };
   jobs.set(job.id, job);
   queue.push(job);
   pump();
@@ -47,6 +62,9 @@ export function getReadyFile(id: string): { filePath: string; size: number } | '
   const job = jobs.get(id);
   if (!job) return 'NOT_FOUND';
   if (job.status !== 'ready' || !job.filePath) return 'NOT_READY';
+  // Bounded re-delivery: aborted and repeated downloads would otherwise multiply egress.
+  if (job.serves >= config.maxServeAttempts) return 'NOT_FOUND';
+  job.serves++;
   return { filePath: job.filePath, size: fs.statSync(job.filePath).size };
 }
 
@@ -72,6 +90,7 @@ async function run(job: Job): Promise<void> {
   running++;
   const timer = setTimeout(() => job.abort.abort(), config.jobTimeoutMs);
   try {
+    if (breaker.isOpen()) throw new SourceError('BLOCKED'); // queued before the pause began
     job.filePath = await withRetry(async () => {
       removeFiles(job.id); // a failed attempt may leave partial files
       job.status = 'fetching_metadata';
@@ -85,9 +104,13 @@ async function run(job: Job): Promise<void> {
       if (config.debug) console.error(`[job] transient failure, retry ${n}/${config.downloadRetries}`);
     });
     job.status = 'ready';
+    breaker.recordOk();
   } catch (e) {
     if (job.abort.signal.aborted) job.errorCode = 'TIMEOUT';
-    else if (e instanceof SourceError) job.errorCode = e.code;
+    else if (e instanceof SourceError) {
+      job.errorCode = e.code;
+      if (e.code === 'BLOCKED' && !breaker.isOpen()) breaker.recordBlocked();
+    }
     else {
       job.errorCode = 'DOWNLOAD_FAILED';
       if (config.debug) console.error('[job] unexpected error:', e);

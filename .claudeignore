@@ -1,0 +1,59 @@
+# Dependências e pacotes
+node_modules/
+vendor/
+venv/
+.venv/
+__pycache__/
+*.pyc
+target/
+
+# Arquivos de build e compilação
+dist/
+build/
+out/
+.next/
+.nuxt/
+.output/
+coverage/
+
+# Arquivos de lock (muito extensos e pouco úteis para o contexto)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+Cargo.lock
+poetry.lock
+composer.lock
+
+# Logs, caches e arquivos temporários
+*.log
+npm-debug.log*
+.cache/
+.tmp/
+.temp/
+.DS_Store
+Thumbs.db
+
+# Controle de versão e IDEs
+.git/
+.idea/
+.vscode/
+
+# Mídia, binários e dados pesados
+*.mp4
+*.mov
+*.avi
+*.mp3
+*.wav
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.ico
+*.pdf
+*.zip
+*.tar.gz
+*.rar
+*.sqlite
+*.db
+*.csv
+*.parquet
