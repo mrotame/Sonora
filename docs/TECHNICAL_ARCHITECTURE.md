@@ -154,7 +154,7 @@ Performance decisions must be validated by profiling on representative target de
 - The backend delivers the original m4a/AAC audio stream without re-encoding (replaces the earlier MP3 192 kbps target). It always requests the same format to keep identity differences minimal. Conversion (for example to MP3 via ffmpeg) is only a fallback when no m4a stream exists. Opus/WebM is avoided as the default because of inconsistent Safari support.
 - Initial maximum source duration: 10 minutes.
 - The resulting file is stored temporarily and is not intended to become a permanent user music library.
-- Hosting provider is deliberately unspecified; architecture must remain hosting-agnostic.
+- Hosting: Cloud Run for the backend and GitHub Pages for the frontend (ADR 0011). The code must stay hosting-agnostic: provider specifics live only in the Dockerfile, the workflows, and environment variables.
 
 **DECIDED — Backend implementation**
 - Extractor: yt-dlp, behind the replaceable source adapter. Runtime: Node.js + TypeScript, invoking yt-dlp (and ffmpeg only for the fallback) as subprocesses; HTTP contract types may be shared with the frontend.
@@ -190,9 +190,9 @@ These are approved initial direction/operating parameters, subject to validation
 - Error codes: `INVALID_URL, UNAVAILABLE, LIVE, TOO_LONG, TOO_LARGE, BLOCKED, TIMEOUT, DOWNLOAD_FAILED, BUSY, RATE_LIMITED, NOT_FOUND`. The frontend maps them to one non-technical sentence each. The backend keeps no URL after the job runs and logs no media data (extractor diagnostics only with `SONORA_DEBUG=1`).
 - The frontend polls every 700 ms, retries only network failures (3 times), and gives up after 150 s (initial values).
 - The backend retries a job's metadata and download steps up to 2 extra times (1.5 s, then 3 s) only for the generic failure `DOWNLOAD_FAILED`, inside the job timeout. Unavailable, live, too long, too large, blocked and timeout are definitive and never retried (`server/retry.ts`). Added after a single unexplained failure in the first manual test.
-- Operating values (concurrency 2, queue 10, job timeout 120 s, ready TTL 10 min, max file 30 MiB, 10 requests per minute per IP) are configurable starting points, not decisions. Rate limiting uses the socket address and must be revisited behind a proxy when the host is chosen.
+- Operating values (concurrency 2, queue 10, job timeout 120 s, ready TTL 10 min, max file 30 MiB, 10 requests per minute per IP) are configurable starting points, not decisions. Rate limiting uses the last `X-Forwarded-For` entry when `TRUST_PROXY=1` (set in the Docker image); its behavior behind the Cloud Run proxy is not yet verified.
 
-**OPEN** — The hosting provider and the calibrated operational limit values.
+**OPEN** — The calibrated operational limit values, and whether Cloud Run's CPU throttling and in-memory `/tmp` are acceptable for background jobs and the egress counter.
 
 **Implementation status (2026-11-15):** the backend (`server/`) and the frontend adapter (`src/audio/sources/backendSource.ts`) and decoding module (`src/audio/processing/decode.ts`) are implemented and verified locally end to end with the 3 test videos in Edge and Brave (identity equals the SHA-256 of the file in all cases). Failure paths verified locally: invalid URL, playlist URL, unavailable video, duration above the limit (with a lowered limit), and backend not running. Not verified: live and private videos, a video above 10 minutes, any datacenter host.
 

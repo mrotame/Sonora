@@ -19,6 +19,9 @@ export type AcquisitionStatus = Exclude<JobStatus, 'failed' | 'ready'> | 'transf
 const POLL_INTERVAL_MS = 700;
 const ACQUISITION_TIMEOUT_MS = 150_000; // initial value, to be calibrated
 const TRANSIENT_RETRIES = 3; // simple retry on network failures only (PRODUCT_SPEC 2.4)
+// Backend origin for builds served from another host (e.g. GitHub Pages). Empty means
+// same origin, which the Vite dev proxy uses in development.
+const API_BASE = String(import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '');
 
 async function request(input: string, init: RequestInit | undefined, signal: AbortSignal): Promise<Response> {
   for (let attempt = 0; ; attempt++) {
@@ -80,7 +83,7 @@ async function downloadFromBackend(
 ): Promise<ArrayBuffer> {
   const deadline = Date.now() + ACQUISITION_TIMEOUT_MS;
 
-  const created = await request('/api/jobs', {
+  const created = await request(`${API_BASE}/api/jobs`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ url }),
@@ -90,7 +93,7 @@ async function downloadFromBackend(
 
   for (;;) {
     if (Date.now() > deadline) throw new AcquisitionError('TIMEOUT');
-    const res = await request(`/api/jobs/${jobId}`, undefined, signal);
+    const res = await request(`${API_BASE}/api/jobs/${jobId}`, undefined, signal);
     if (!res.ok) return failFrom(res);
     const job = (await res.json()) as JobResponse;
     if (job.status === 'failed') throw new AcquisitionError(job.errorCode ?? 'DOWNLOAD_FAILED');
@@ -100,7 +103,7 @@ async function downloadFromBackend(
   }
 
   onStatus('transferring');
-  const audio = await request(`/api/jobs/${jobId}/audio`, undefined, signal);
+  const audio = await request(`${API_BASE}/api/jobs/${jobId}/audio`, undefined, signal);
   if (!audio.ok) return failFrom(audio);
   return audio.arrayBuffer();
 }

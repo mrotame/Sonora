@@ -3,6 +3,15 @@ name: Deploy backend to Cloud Run
 on:
   push:
     branches: [main]
+    # Only backend-relevant changes redeploy the service.
+    paths:
+      - 'server/**'
+      - 'shared/**'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/deploy-backend.yml'
   workflow_dispatch:
 
 # One deploy at a time; a newer push supersedes a queued one.

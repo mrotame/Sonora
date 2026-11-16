@@ -19,6 +19,8 @@
 | 0007 | In-house TypeScript audio analysis | DECIDED |
 | 0008 | Acquisition backend: Node.js + TypeScript with yt-dlp | DECIDED |
 | 0009 | Audio identity from the delivered file bytes (amends 0006) | DECIDED |
+| 0010 | Local audio cache in IndexedDB | DECIDED |
+| 0011 | Hosting: GitHub Pages (frontend) and Cloud Run (backend), deployed by GitHub Actions | DECIDED |
 
 ---
 
@@ -277,7 +279,7 @@ The browser cannot fetch YouTube audio directly: YouTube pages and media servers
 
 - yt-dlp must be kept up to date; extractor breakage and datacenter-IP blocking are accepted operational risks.
 - Operational viability must be validated by the feasibility spike in `TECHNICAL_ARCHITECTURE.md` Section 5.1 before the backend is built.
-- Hosting provider remains unspecified; requirements are long-running processes, an installable yt-dlp, and temporary disk.
+- Hosting requirements are long-running processes, an installable yt-dlp, and temporary disk; the provider is chosen in ADR 0011.
 - Restarting the service loses in-flight jobs.
 - Operational limit values (TTL, concurrency, file size, timeout) are starting points to be calibrated, not decisions.
 
@@ -343,6 +345,35 @@ The client stores the delivered audio bytes in IndexedDB, keyed by YouTube video
 - The audio identity is still computed from the bytes on each execution; cached bytes make it stable for that browser.
 - Catalog, history, and identity/analysis caches remain prohibited.
 - No UI to inspect or clear the cache yet (not in scope).
+
+---
+
+# ADR 0011 - Hosting: GitHub Pages and Cloud Run, Deployed by GitHub Actions
+
+- **Status:** DECIDED
+- **Decision date:** 2026-11-16
+- **Resolves:** the OPEN hosting provider in `TECHNICAL_ARCHITECTURE.md` Section 5.1 and ADR 0008.
+
+## Context
+
+The project owner chose to host the backend on Google Cloud Run within the free tier and the static frontend on GitHub Pages, with deployment on every push to `main`.
+
+## Decision
+
+- Frontend: `vite build` output published to GitHub Pages (`.github/workflows/deploy-frontend.yml`), served under `/<repo>/` (`BASE_PATH`). The backend origin is injected at build time as `VITE_API_BASE_URL` from the `BACKEND_URL` repository variable; empty means same origin (development proxy).
+- Backend: Docker image built by Cloud Build and deployed to Cloud Run in `us-central1`, `max-instances=1` (`.github/workflows/deploy-backend.yml`). Authentication uses Workload Identity Federation, with no stored keys. `ALLOWED_ORIGIN` restricts browser reads (CORS) to the Pages origin.
+- Each workflow runs only when its side changes (path filters). Free-tier guards are in `deploy/gcp-free-tier-guards.sh`.
+
+## Rationale
+
+- Both are free at personal-project scale and need no server administration.
+- The backend stays a plain Node service in a container, so the architecture remains portable.
+
+## Consequences
+
+- Cross-origin calls depend on CORS and on `ALLOWED_ORIGIN` matching the Pages origin.
+- Cloud Run throttles CPU outside requests and keeps `/tmp` in memory: background yt-dlp work and the egress counter (reset on cold start) still need validation.
+- yt-dlp on a datacenter IP remains unvalidated (ADR 0008).
 
 ---
 

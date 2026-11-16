@@ -1,0 +1,57 @@
+name: Deploy frontend to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'server/**'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'deploy/**'
+      - '.github/workflows/deploy-backend.yml'
+      - '**/*.md'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-frontend
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if the backend URL is missing
+        if: ${{ vars.BACKEND_URL == '' }}
+        run: echo "::error::Set the BACKEND_URL repository variable" && exit 1
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      # `build` also runs the typecheck.
+      - run: npm run build
+        env:
+          # Project site is served at https://<owner>.github.io/<repo>/
+          BASE_PATH: /${{ github.event.repository.name }}/
+          # Cloud Run service URL (repository variable), e.g. https://sonora-backend-xxxx-uc.a.run.app
+          VITE_API_BASE_URL: ${{ vars.BACKEND_URL }}
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
