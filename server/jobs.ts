@@ -7,6 +7,7 @@ import { Breaker } from './limits.ts';
 import { audioDownloaderConverter } from './rapidapi.ts';
 import { withRetry } from './retry.ts';
 import { type AudioSource, downloadWithFallback } from './sources.ts';
+import { ytMp3M4a } from './ytMp3M4a.ts';
 import { ytToMp3 } from './ytToMp3.ts';
 import { downloadAudio, fetchMetadata, SourceError } from './ytdlp.ts';
 
@@ -29,7 +30,7 @@ let running = 0;
 
 /** Production sources, highest priority first. Used only when RAPIDAPI_KEY is set (Cloud Run).
  * Both share the same RapidAPI key; each needs its own (free) subscription on that account. */
-const PROVIDERS: readonly AudioSource[] = [ytToMp3, audioDownloaderConverter];
+const PROVIDERS: readonly AudioSource[] = [ytMp3M4a, ytToMp3, audioDownloaderConverter];
 
 /** Stops hitting the source after repeated blocks (see limits.ts). */
 export const breaker = new Breaker(config.breakerThreshold, config.breakerPauseMs);
