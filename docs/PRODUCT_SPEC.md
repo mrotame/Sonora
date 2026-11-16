@@ -62,12 +62,12 @@ This restriction applies to the user interface and MVP interaction model. It doe
 - The camera represents the user and is the protagonist/perspective of the experience.
 - The camera continuously advances forward in a straight line.
 - The camera's forward movement is independent of its viewing direction.
-- The user can look horizontally to either side, within a maximum range of 55 degrees from the forward direction (changed from 45 degrees, user-authorized 2026-11-15).
+- The user can look horizontally to either side, within a maximum range of 65 degrees from the forward direction (changed from 45 to 55 degrees on 2026-11-15 and to 65 degrees on 2026-11-16, user-authorized).
 - The user can also look vertically, within independent limits of 55 degrees upward and 30 degrees downward (changed from 45/45, user-authorized 2026-11-15).
 - The angular limits are independent on each axis. They do not define a combined viewing cone.
 - The permitted viewing limits are:
-  - Left: -55 degrees.
-  - Right: +55 degrees.
+  - Left: -65 degrees.
+  - Right: +65 degrees.
   - Up: +55 degrees.
   - Down: -30 degrees.
 - Looking around must not change the direction or route of forward movement.
@@ -420,7 +420,7 @@ Exact minimum hardware, minimum acceptable frame rate, and quality adaptation re
 - Three initial scenarios based on the supplied concept arts.
 - Automatic playback and world progression once preparation is complete.
 - No user-facing pause, resume, seek, rewind, fast-forward, or speed controls.
-- A continuously forward-moving first-person camera with horizontal look limited to ±55° and vertical look to +55° up and -30° down, independently.
+- A continuously forward-moving first-person camera with horizontal look limited to ±65° and vertical look to +55° up and -30° down, independently.
 - Secondary environmental entities are allowed, provided they do not become the protagonist or control the camera route.
 - Deterministic world identity based on SHA-256 of the delivered audio file bytes, scenario identifier, scenario version, and generation version.
 - Canonical PCM representation (44,100 Hz, stereo, Float32, little-endian, no volume normalization) as the input of analysis; it is not hashed.

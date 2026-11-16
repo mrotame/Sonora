@@ -419,6 +419,8 @@ This approach identifies the exact delivered file, including its container and m
 
 **PROPOSED — Synthwave skyline v2 (2026-11-15, user-requested, awaiting visual approval on a GPU)** — Scene-only change to the horizon ring city (scenario version stays 15). Four rows of 300 slots (1200 buildings, 4.7 to 5.4 km) whose angles are warped toward straight ahead, so the skyline is dense and tall under the sun and thins out and lowers toward the sides (height envelope: a central Gaussian of about 0.45 rad plus a wide low one; empty slots grow toward the sides). Each instance is four unit boxes shaped in the vertex shader: body, optional setback tier, roof (flat, pyramid spire, slanted wedge or tapered crown) and optional antenna with a beacon; unused parts collapse to zero size. Lights are static (2026-11-16, user-requested): a fixed, hash-chosen share of windows (per world salt) is lit at constant brightness, and neon rims and antenna beacons are steady; no time or music input, so there are no `SynthwaveParams` for the city. Lights cut through the haze more than facades. Cost: same 1 draw call, about 58k triangles for the city (was about 6k). Verified by typecheck, unit tests and headless SwiftShader screenshots; GPU frame rate not measured.
 
+**PROPOSED — Synthwave skyline v3 and mountain growth (2026-11-16, user-requested, awaiting visual approval on a GPU)** — Scene-only changes (`synthwave/scene.ts`; scenario version stays 17). City: 3 rows of 250 slots (750 slots, about 500 buildings drawn after the empty slots; was 1200), rows 280 m apart and staggered by half a slot, a softer pack toward the centre (`core` 0.3 -> 0.5) and narrower buildings than the slot spacing, so neighbours keep a gap; each building has its own facade shade and back rows take more haze. Windows use larger cells (40 x 34 instead of 30 x 22), anti-aliased edges, and blend into their average glow once a cell drops under a few pixels, so they no longer shimmer. The city still stands on the ground ahead (unchanged), so it stays visible from high up; a fixed-height city anchored to the path's end height was tried and reverted at the user's request, because it sank out of view while the road was far above it. Mountains: the growth window moved from 25..175 m to 150..600 m ahead of the camera with the same eased curve (small start, increasingly fast rise), so at cruise speed the strong rise ends about 2 s ahead and is visible. Verified by typecheck, unit tests and headless SwiftShader screenshots of a synthetic path (ground level and 2.5 km above the end height, plus a 60° side view); GPU frame rate not measured.
+
 **OPEN**
 - Concrete `L` per scenario and coordinate conventions.
 - Final window values after profiling.
@@ -504,8 +506,8 @@ Responsibilities:
 **DECIDED** — Forward travel remains on a straight path. Horizontal and vertical looking do not change the travel direction.
 
 **DECIDED — Camera look limits**
-- Horizontal look to the left: maximum -55° (changed from -45°, user-authorized 2026-11-15).
-- Horizontal look to the right: maximum +55°.
+- Horizontal look to the left: maximum -65° (changed from -45° to -55° on 2026-11-15 and to -65° on 2026-11-16, user-authorized).
+- Horizontal look to the right: maximum +65°.
 - Vertical look upward: maximum +55° (changed from +45°, user-authorized 2026-11-15).
 - Vertical look downward: maximum -30° (changed from -45°, user-authorized 2026-11-15).
 - Horizontal and vertical limits are independent.
@@ -526,7 +528,7 @@ Responsibilities:
 
 **DECIDED — Look input and recentering**
 - Desktop: mouse movement; mobile: finger drag. Gyroscope is out of the MVP.
-- Input changes a look offset (yaw and pitch) relative to the forward direction, clamped independently per axis (±55° horizontal, +55° up, -30° down).
+- Input changes a look offset (yaw and pitch) relative to the forward direction, clamped independently per axis (±65° horizontal, +55° up, -30° down).
 - When input stops (mouse idle, or finger released), the offset returns slowly and automatically to zero (forward-facing center). The camera is never free-look.
 - Because the offset is accumulated from movement and decays toward zero, absolute cursor-position mapping is not used.
 

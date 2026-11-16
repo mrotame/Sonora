@@ -1,10 +1,10 @@
 // Camera look offset (TECHNICAL_ARCHITECTURE 11): accumulated from input,
-// clamped independently per axis (+-55 degrees horizontal, 55 degrees up and
+// clamped independently per axis (+-65 degrees horizontal, 55 degrees up and
 // 30 degrees down), and slowly returning to the forward direction when input
 // stops. Pure logic; no DOM.
 
 const DEG = Math.PI / 180;
-export const YAW_LIMIT_RAD = 55 * DEG;
+export const YAW_LIMIT_RAD = 65 * DEG;
 export const PITCH_UP_LIMIT_RAD = 55 * DEG;
 export const PITCH_DOWN_LIMIT_RAD = 30 * DEG;
 

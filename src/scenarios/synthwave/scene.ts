@@ -15,9 +15,11 @@ const NEAR_REACH = [0.75 * NEAR_AHEAD, 0.9 * NEAR_AHEAD, TERRAIN.halfWidth - 80,
 /** Fog starts at x and is complete at y, just before the end of the far field. */
 const FOG_RANGE = [0.15 * FAR_AHEAD, 0.95 * FAR_AHEAD] as const;
 // Mountains reach their final size GROW_DONE units ahead of the camera and are at their start size from GROW_START on.
-// Travel speed is 30 units/s, so the 25..175 window is a 5 s growth that ends about 1 s before the camera passes.
-const GROW_DONE = 25;
-const GROW_START = 175;
+// The eased curve keeps the strongest rise near GROW_DONE. It used to be 25..175: at the 280 km/h cruise (about
+// 78 units/s) the strong rise came about 0.3 s before the camera passed, at the edge of the view. At 150..600 the
+// mountain still starts small and rises harder and harder, but the strong rise ends about 2 s ahead, in plain view.
+const GROW_DONE = 150;
+const GROW_START = 600;
 const HORIZON = new THREE.Color(0.1, 0.02, 0.2);
 /** Terrain fog never goes above this, so the far plain stays readable as ground below the horizon ring. */
 const FOG_CAP = 0.85;
@@ -41,7 +43,7 @@ const PLAIN = { inner: 800, outer: 6800, rings: 64, sectors: 256, dropInner: 80,
  * toward straight ahead (under the sun): there the slot spacing is `core` times an even spread, so the centre is about
  * 1/core times denser than an even ring. `coreWidth` (radians) is the half-width of the tall central cluster.
  */
-const CITY = { radius: 4700, rowGap: 220, rows: 4, perRow: 300, core: 0.3, coreWidth: 0.45 } as const;
+const CITY = { radius: 4700, rowGap: 280, rows: 3, perRow: 250, core: 0.5, coreWidth: 0.45 } as const;
 const RIDGE = { radius: 6200, steps: 720 } as const;
 /** Haze on tall parts of the city and ridge; their base dissolves into the ground haze (FOG_CAP) like a low mist. */
 const RING_FOG = 0.3;
@@ -207,14 +209,18 @@ const CITY_VERTEX = /* glsl */ `
   varying vec3 vPart; // x: part, y: its base height, z: its top height (above the ground)
   varying float vSide; // 1 on vertical faces, 0 on top and bottom faces
   varying float vId;
+  varying float vRow;
 
   float h11(float n) { return fract(sin(n * 127.1 + uSalt * 311.7) * 43758.5453); }
 
   void main() {
     float id = aSlot.x + aSlot.y * 1000.0;
     vId = id;
+    vRow = aSlot.y;
     // Even slot position v in [-1, 1], warped so the slots crowd around v = 0 (a = 0 is straight ahead, -z).
-    float v = 2.0 * (aSlot.x + 0.5 + (h11(id) - 0.5) * 0.8) / ${CITY.perRow.toFixed(1)} - 1.0;
+    // Rows are staggered by half a slot, so back buildings show in the gaps between the front ones; the small jitter
+    // keeps neighbours from touching.
+    float v = 2.0 * (aSlot.x + 0.5 + 0.5 * mod(aSlot.y, 2.0) + (h11(id) - 0.5) * 0.3) / ${CITY.perRow.toFixed(1)} - 1.0;
     float a = 3.14159265 * v * (${CITY.core.toFixed(2)} + ${(1 - CITY.core).toFixed(2)} * v * v);
     float c1 = a / ${CITY.coreWidth.toFixed(2)}, c2 = a / 1.2;
     float core = exp(-c1 * c1);
@@ -224,8 +230,10 @@ const CITY_VERTEX = /* glsl */ `
     float height = (30.0 + 90.0 * hb) + env * (160.0 + 1150.0 * pow(hb, 1.3));
     height *= (0.8 + 0.12 * aSlot.y) * (0.95 + 0.1 * h11(id + 0.45)); // back rows stand taller behind the front
     float present = step(0.08 + 0.35 * (1.0 - env), h11(id + 0.5)); // gaps grow toward the sides
-    float width = mix(60.0 + 130.0 * h11(id + 0.2), 45.0 + 70.0 * h11(id + 0.2), core); // slender towers in the centre
-    float depth = 50.0 + 70.0 * h11(id + 0.3);
+    // Narrower than the slot spacing (about 59 units in the centre, more toward the sides), so each building keeps a
+    // visible gap to its neighbours; slender towers in the centre.
+    float width = mix(55.0 + 75.0 * h11(id + 0.2), 30.0 + 26.0 * h11(id + 0.2), core);
+    float depth = 40.0 + 50.0 * h11(id + 0.3);
 
     // Setback tier on some tall buildings.
     float tier = step(0.5, h11(id + 0.6)) * step(260.0, height);
@@ -281,28 +289,40 @@ const CITY_FRAGMENT = /* glsl */ `
   varying vec3 vPart;
   varying float vSide;
   varying float vId;
+  varying float vRow;
   ${SKY_COLOR}
 
   float h11(float n) { return fract(sin(n * 127.1 + uSalt * 311.7) * 43758.5453); }
 
+  // Anti-aliased box: 1 inside [lo, hi], edges softened over w.
+  float aaBox(float x, float lo, float hi, float w) {
+    return smoothstep(lo - w, lo + w, x) * (1.0 - smoothstep(hi - w, hi + w, x));
+  }
+
   void main() {
     float y = vFace.y;
     float part = vPart.x;
-    vec3 color = mix(vec3(0.05, 0.0, 0.12), uHorizon, clamp(y / 1400.0, 0.0, 1.0) * 0.6);
+    // Each building gets its own facade shade, so neighbours read as separate masses.
+    vec3 color = mix(vec3(0.05, 0.0, 0.12), uHorizon, clamp(y / 1400.0, 0.0, 1.0) * 0.6) * (0.75 + 0.5 * h11(vId + 0.9));
     vec3 tint = mix(vec3(0.1, 0.9, 1.0), vec3(1.0, 0.2, 0.75), h11(vId + 0.7));
     vec3 light = vec3(0.0);
 
     // Lit windows on the body and tier facades: a fixed share of the cells, chosen by a hash of the window and the
     // world salt, so each window is either always on or always off, at a constant brightness (no blinking or pulse).
-    vec2 g = vec2(vFace.x / 30.0, y / 22.0);
+    // Large cells (about 5 x 5 px at 1080p from the city's distance) keep single windows legible; once a cell shrinks
+    // to a few pixels the windows blend into their average glow instead of shimmering.
+    vec2 g = vec2(vFace.x / 40.0, y / 34.0);
     vec2 cell = floor(g), inCell = fract(g);
+    vec2 fw = fwidth(g);
     float wid = cell.x * 17.0 + cell.y * 131.0 + vId * 7.3;
     float r = h11(wid);
     float on = step(h11(wid + 1.618), 0.24);
-    float lit = on * step(part, 1.5) * step(0.5, vSide)
-      * step(0.2, inCell.x) * step(inCell.x, 0.8) * step(0.3, inCell.y) * step(inCell.y, 0.7)
+    float sharp = on * aaBox(inCell.x, 0.2, 0.8, fw.x * 0.5) * aaBox(inCell.y, 0.3, 0.7, fw.y * 0.5) * (0.7 + 0.3 * fract(r * 13.7));
+    float tiny = smoothstep(0.2, 0.4, max(fw.x, fw.y)); // cell under about 3 to 5 px
+    float window = mix(sharp, 0.24 * 0.24 * 0.85, tiny); // lit share x window area x mean brightness
+    float lit = window * step(part, 1.5) * step(0.5, vSide)
       * step(vPart.y + 10.0, y) * step(y, vPart.z - 10.0) * step(10.0, y);
-    light += tint * lit * 1.4 * (0.7 + 0.3 * fract(r * 13.7));
+    light += tint * lit * 1.4;
 
     // Neon rim along the top edge of the body, the setback and some crowns of the taller buildings, steady.
     float rimW = max(10.0, fwidth(y) * 1.5);
@@ -315,7 +335,8 @@ const CITY_FRAGMENT = /* glsl */ `
     light += vec3(1.0, 0.15, 0.35) * beacon * 0.65;
 
     vec3 toFrag = vWorld - cameraPosition;
-    float fog = mix(${FOG_CAP.toFixed(2)}, ${RING_FOG.toFixed(2)}, smoothstep(0.0, 120.0, y));
+    // Back rows sit deeper in the haze, so the rows separate in depth instead of merging into one wall.
+    float fog = mix(${FOG_CAP.toFixed(2)}, ${RING_FOG.toFixed(2)} + 0.12 * vRow, smoothstep(0.0, 120.0, y));
     // Lights cut through the haze more than the dark facades do.
     gl_FragColor = vec4(mix(color, skyHaze(normalize(toFrag)), fog) + light * (1.0 - 0.6 * fog), 1.0);
   }
@@ -798,7 +819,8 @@ export class SynthwaveScene implements ScenarioScene {
     ember.uTime!.value = trackTime;
     this.sky.position.copy(cameraPosition);
     this.updateGround(cameraPosition);
-    this.updateEmberRoad(cameraPosition);  }
+    this.updateEmberRoad(cameraPosition);
+  }
 
   dispose(): void {
     for (const index of [...this.meshes.keys()]) this.removeSegment(index);
