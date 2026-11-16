@@ -168,7 +168,8 @@ export function App() {
 
   const overlay = phase !== 'running';
   // The speed graph only makes sense for scenarios whose speed follows the music.
-  const showSpeedGraph = phase === 'running' && !!scenarios.find((s) => s.logic.id === scenarioId)?.logic.createPath;
+  const activeLogic = scenarios.find((s) => s.logic.id === scenarioId)?.logic;
+  const showSpeedGraph = phase === 'running' && !!activeLogic?.createPath && activeLogic.config.speedGraph !== false;
   return (
     <>
       <canvas ref={canvasRef} style={{ position: 'fixed', inset: 0, width: '100%', height: '100%', display: 'block', touchAction: 'none' }} />

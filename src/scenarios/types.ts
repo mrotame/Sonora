@@ -9,6 +9,8 @@ export interface ScenarioScene {
   readonly scene: THREE.Scene;
   /** Clear color matching the scenario's horizon. */
   readonly background: THREE.Color;
+  /** Optional: resolves once the scene's assets (textures) are loaded; awaited before the first frame. */
+  ready?(): Promise<void>;
   addSegment(index: number, descriptor: unknown, startDistance: number): void;
   removeSegment(index: number): void;
   /** Far-field layer (only for scenarios whose logic defines `farField`): coarse segments that extend the view distance. */
@@ -37,6 +39,8 @@ export interface ScenarioConfig {
   eyeHeight: number;
   /** Camera far plane in world units (default 1500). Must cover the scenario's farthest visible content. */
   viewDistance?: number;
+  /** Show the speed/height graph HUD when the scenario has a path (default true). */
+  speedGraph?: boolean;
 }
 
 /** Streaming window of the optional far-field layer, in far segments of its own length. */
@@ -60,6 +64,8 @@ export interface TrackPath {
   heightAt(t: number): number;
   /** Road slope (rise over run along the travel axis) at track time t. */
   slopeAt(t: number): number;
+  /** Optional vertical field of view (degrees) at track time t; absent = the controller's default (70). */
+  fovAt?(t: number): number;
 }
 
 export interface SegmentInput {

@@ -31,6 +31,8 @@ export interface ExperienceOptions {
 }
 
 const MAX_PIXEL_RATIO = 2;
+/** Vertical field of view (degrees) when the scenario path does not set one. */
+const DEFAULT_FOV = 70;
 /** Fraction of the road slope angle the camera pitch follows (only for scenarios with a path). */
 const PATH_TILT = 0.8;
 /** 0.5 (not 0.1) keeps depth precision usable when a scenario's view distance reaches kilometres. */
@@ -46,7 +48,7 @@ export function fadeOut(t: number, musicEndS: number): number {
 
 export class Experience {
   private readonly renderer: THREE.WebGLRenderer;
-  private readonly camera = new THREE.PerspectiveCamera(70, 1, NEAR_PLANE, 1500);
+  private readonly camera = new THREE.PerspectiveCamera(DEFAULT_FOV, 1, NEAR_PLANE, 1500);
   private readonly sceneImpl: ScenarioScene;
   private readonly look = new LookState();
   private readonly manager: SegmentManager<unknown>;
@@ -80,7 +82,7 @@ export class Experience {
 
     // Optional scenario-owned path (variable speed and road elevation); built from the same timeline as in the Worker.
     this.path = definition.logic.createPath?.(opts.timeline);
-    if (this.path && opts.speedGraphCanvas) {
+    if (this.path && opts.speedGraphCanvas && definition.logic.config.speedGraph !== false) {
       this.speedGraph = new SpeedGraph(opts.speedGraphCanvas, this.path, opts.timeline.durationS);
     }
 
@@ -137,7 +139,7 @@ export class Experience {
   /** Generates the first segments so playback starts on a complete view. */
   async prepare(): Promise<void> {
     this.updateCamera(0, 0);
-    await Promise.all([this.manager.update(0), this.farManager?.update(0)]);
+    await Promise.all([this.manager.update(0), this.farManager?.update(0), this.sceneImpl.ready?.()]);
     this.renderer.render(this.sceneImpl.scene, this.camera); // compiles shaders before audio starts
   }
 
@@ -207,6 +209,12 @@ export class Experience {
     // The camera tilts with the road (uphill looks up, a drop looks down) so steep slopes stay in view; look is added on top.
     const tilt = this.path ? Math.atan(this.path.slopeAt(t)) * PATH_TILT : 0;
     this.camera.rotation.set(this.look.pitch + tilt, -this.look.yaw, 0);
+    // Optional music-driven field of view (pure function of track time).
+    const fov = this.path?.fovAt?.(t) ?? DEFAULT_FOV;
+    if (fov !== this.camera.fov) {
+      this.camera.fov = fov;
+      this.camera.updateProjectionMatrix();
+    }
   }
 
   private resize(): void {

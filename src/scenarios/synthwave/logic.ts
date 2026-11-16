@@ -52,12 +52,6 @@ export interface SynthwaveParams {
   /** Fraction of the embers that are visible (0..1). */
   emberDensity: number;
   emberGlow: number;
-  /** Skyline lights: brightness of windows and neon rims (pulses with bass and energy). */
-  cityGlow: number;
-  /** Skyline lights: share of windows switched on, 0..1 (more in loud passages). */
-  cityWindows: number;
-  /** Skyline lights: antenna beacons (blink with highs and onsets). */
-  cityBeacon: number;
   /** Constant per world: varies the skyline silhouette and ember placement between tracks. */
   worldSalt: number;
 }
@@ -175,9 +169,6 @@ function interpret(f: Features, seed: Seed): SynthwaveParams {
     mountainPulse: 0.25 * f.bass,
     emberDensity: 0.65 + 0.35 * f.energy,
     emberGlow: 0.8 + 0.8 * f.mid + 0.6 * f.flux,
-    cityGlow: 0.25 + 0.75 * f.bass + 0.3 * f.energy,
-    cityWindows: f.energy,
-    cityBeacon: 0.2 + 0.5 * f.high + 0.8 * f.flux,
     worldSalt: 1 + 99 * rand(seed, 1),
   };
 }

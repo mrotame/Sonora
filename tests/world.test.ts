@@ -59,9 +59,6 @@ test('each star population follows its own band, and the mountains pulse with ba
   assert.ok(midOnly.starMid > base.starMid && midOnly.starBass === base.starBass && midOnly.starHigh === base.starHigh);
   assert.ok(highOnly.starHigh > base.starHigh && highOnly.starBass === base.starBass && highOnly.starMid === base.starMid);
   assert.ok(bassOnly.mountainPulse > base.mountainPulse);
-  assert.ok(bassOnly.cityGlow > base.cityGlow && highOnly.cityBeacon > base.cityBeacon);
-  const loudCity = synthwaveLogic.interpret({ energy: 1, bass: 0, mid: 0, high: 0, flux: 0 }, worldSeed);
-  assert.ok(loudCity.cityWindows > base.cityWindows);
   assert.equal(base.worldSalt, synthwaveLogic.interpret({ energy: 1, bass: 1, mid: 1, high: 1, flux: 1 }, worldSeed).worldSalt);
 });
 

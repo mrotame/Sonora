@@ -281,8 +281,6 @@ const CITY_FRAGMENT = /* glsl */ `
   varying vec3 vPart;
   varying float vSide;
   varying float vId;
-  uniform vec3 uCity; // x: light glow (pulse), y: share of lit windows, z: antenna beacons
-  uniform float uTime; // track time (s): drives the per-window light cycles, so they are time-addressable
   ${SKY_COLOR}
 
   float h11(float n) { return fract(sin(n * 127.1 + uSalt * 311.7) * 43758.5453); }
@@ -294,36 +292,27 @@ const CITY_FRAGMENT = /* glsl */ `
     vec3 tint = mix(vec3(0.1, 0.9, 1.0), vec3(1.0, 0.2, 0.75), h11(vId + 0.7));
     vec3 light = vec3(0.0);
 
-    // Lit windows on the body and tier facades. Each window runs on its own clock (track time, own period and phase):
-    // at every step it redraws whether it is on and crossfades to it over seconds, and while on it slowly breathes.
-    // So the lights fade in and out asynchronously; the music only sets how many are on and adds a mild pulse.
+    // Lit windows on the body and tier facades: a fixed share of the cells, chosen by a hash of the window and the
+    // world salt, so each window is either always on or always off, at a constant brightness (no blinking or pulse).
     vec2 g = vec2(vFace.x / 30.0, y / 22.0);
     vec2 cell = floor(g), inCell = fract(g);
     float wid = cell.x * 17.0 + cell.y * 131.0 + vId * 7.3;
     float r = h11(wid);
-    float u = uTime / (4.0 + 8.0 * fract(r * 7.31)) + fract(r * 3.17);
-    float k = floor(u);
-    float s = mix(h11(wid + k * 1.618), h11(wid + (k + 1.0) * 1.618), smoothstep(0.2, 0.8, fract(u)));
-    float share = 0.12 + 0.24 * uCity.y;
-    float on = 1.0 - smoothstep(share - 0.06, share + 0.02, s);
-    float breathe = 0.6 + 0.4 * sin(6.2831853 * (uTime / (2.5 + 4.5 * fract(r * 5.71)) + fract(r * 9.13)));
+    float on = step(h11(wid + 1.618), 0.24);
     float lit = on * step(part, 1.5) * step(0.5, vSide)
       * step(0.2, inCell.x) * step(inCell.x, 0.8) * step(0.3, inCell.y) * step(inCell.y, 0.7)
       * step(vPart.y + 10.0, y) * step(y, vPart.z - 10.0) * step(10.0, y);
-    light += tint * lit * breathe * (0.95 + 0.35 * uCity.x) * (0.7 + 0.3 * fract(r * 13.7)) * 1.5;
+    light += tint * lit * 1.4 * (0.7 + 0.3 * fract(r * 13.7));
 
-    // Neon rim along the top edge of the body, the setback and some crowns of the taller buildings; each building's
-    // rim breathes on its own slow cycle.
+    // Neon rim along the top edge of the body, the setback and some crowns of the taller buildings, steady.
     float rimW = max(10.0, fwidth(y) * 1.5);
     float rim = (1.0 - smoothstep(0.0, rimW, vPart.z - y)) * step(part, 2.5) * step(0.5, vSide)
       * step(220.0, vPart.z) * (part > 1.5 ? step(0.5, h11(vId + 0.72)) : 1.0);
-    float rimBreathe = 0.55 + 0.45 * sin(6.2831853 * (uTime / (5.0 + 6.0 * h11(vId + 0.73)) + h11(vId + 0.74)));
-    light += tint * rim * rimBreathe * (0.6 + 0.5 * uCity.x);
+    light += tint * rim * 0.55;
 
-    // Beacon at the tip of each antenna: a soft blink with its own rhythm, brighter with highs and onsets.
+    // Steady beacon at the tip of each antenna.
     float beacon = step(2.5, part) * step(vPart.z - 20.0, y);
-    float blink = smoothstep(-0.2, 0.6, sin(6.2831853 * (uTime / (1.6 + 1.6 * h11(vId + 0.82)) + h11(vId + 0.83))));
-    light += vec3(1.0, 0.15, 0.35) * beacon * (0.3 + 0.7 * blink) * (0.3 + 1.4 * uCity.z);
+    light += vec3(1.0, 0.15, 0.35) * beacon * 0.65;
 
     vec3 toFrag = vWorld - cameraPosition;
     float fog = mix(${FOG_CAP.toFixed(2)}, ${RING_FOG.toFixed(2)}, smoothstep(0.0, 120.0, y));
@@ -438,7 +427,8 @@ const TERRAIN_FRAGMENT = /* glsl */ `
     lineColor = mix(lineColor, magenta, onRoad);
 
     float edge = 1.0 - smoothstep(0.0, 0.5, abs(ax - uRoadHalf));
-    float dash = onRoad * (1.0 - smoothstep(0.0, 0.25, ax)) * step(fract(vWorld.z / 8.0), 0.5);
+    // Centre dashes: 12 units long with 20-unit gaps (32-unit period), so they read as separate dashes from afar.
+    float dash = onRoad * (1.0 - smoothstep(0.0, 0.25, ax)) * step(fract(vWorld.z / 32.0), 0.375);
 
     vec3 color = base;
     // Only the peaks pulse with the beat (uGlow, flash); the flat ground and the road keep a steady glow.
@@ -571,8 +561,6 @@ export class SynthwaveScene implements ScenarioScene {
   private readonly embers: THREE.Points;
   private readonly ringMaterials: THREE.ShaderMaterial[];
   private readonly ring: THREE.Mesh[];
-  /** City lights (uCity): glow pulse, share of lit windows, antenna beacons. */
-  private readonly cityLights = new THREE.Vector3(0.5, 0.5, 0.5);
   /** Road elevation per loaded far segment (its rows), the source of the horizon ring's ground samples. */
   private readonly farRoad = new Map<number, { start: number; step: number; roadY: Float32Array }>();
   private readonly ground = new Float32Array(GROUND_SAMPLES);
@@ -638,7 +626,7 @@ export class SynthwaveScene implements ScenarioScene {
         vertexShader: CITY_VERTEX,
         fragmentShader: CITY_FRAGMENT,
         side: THREE.DoubleSide,
-        uniforms: { ...ringUniforms, uCity: { value: this.cityLights }, uTime: { value: 0 } },
+        uniforms: ringUniforms,
       }),
       new THREE.ShaderMaterial({ vertexShader: RIDGE_VERTEX, fragmentShader: RIDGE_FRAGMENT, side: THREE.DoubleSide, uniforms: ringUniforms }),
     ];
@@ -794,7 +782,6 @@ export class SynthwaveScene implements ScenarioScene {
 
   update(params: unknown, cameraPosition: THREE.Vector3, trackTime: number): void {
     const p = params as SynthwaveParams;
-    this.ringMaterials[1]!.uniforms.uTime!.value = trackTime;
     this.terrainMaterial.uniforms.uPulse!.value = p.mountainPulse;
     this.terrainMaterial.uniforms.uGlow!.value = p.gridGlow;
     this.terrainMaterial.uniforms.uFlash!.value = p.flash;
@@ -809,7 +796,6 @@ export class SynthwaveScene implements ScenarioScene {
     ember.uGlow!.value = p.emberGlow;
     ember.uSalt!.value = p.worldSalt;
     ember.uTime!.value = trackTime;
-    this.cityLights.set(p.cityGlow, p.cityWindows, p.cityBeacon);
     this.sky.position.copy(cameraPosition);
     this.updateGround(cameraPosition);
     this.updateEmberRoad(cameraPosition);  }

@@ -77,3 +77,7 @@ The documentation in [docs/](docs/) is the project's source of truth:
 ## Audio acquisition notice
 
 Audio is obtained using unofficial YouTube media-extraction techniques. This is a deliberate choice for a personal, unpublished, non-commercial prototype. It comes with no platform approval, no guarantee of long-term reliability, and no legal clearance. The project does not offer music downloads to users.
+
+## Credits
+
+Voxel Dreamscape uses 14 unmodified 32x32 block textures from the **Faithful 32x** resource pack (version 26.3) by the Faithful team: [https://faithfulpack.net](https://faithfulpack.net). The textures are `grass_block_top`, `grass_block_side`, `dirt`, `stone`, `deepslate`, `oak_log`, `oak_leaves`, `cherry_leaves`, `amethyst_block`, `crying_obsidian`, `purpur_block`, `glowstone`, `prismarine` and `nether_portal`. They are in [src/scenarios/voxel/textures/](src/scenarios/voxel/textures/) and are distributed under the [Faithful License](https://faithfulpack.net/license). A copy of the license is in [LICENSE.txt](src/scenarios/voxel/textures/LICENSE.txt). They are not part of Sonora's own code and are not covered by its license.
