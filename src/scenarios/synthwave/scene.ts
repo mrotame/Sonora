@@ -227,13 +227,15 @@ const CITY_VERTEX = /* glsl */ `
     float env = 0.75 * core + 0.25 * exp(-c2 * c2); // massive in the centre, lower and lower toward the sides
     float radius = ${CITY.radius.toFixed(1)} + aSlot.y * ${CITY.rowGap.toFixed(1)} + (h11(id + 0.1) - 0.5) * 120.0;
     float hb = h11(id + 0.4);
-    float height = (30.0 + 90.0 * hb) + env * (160.0 + 1150.0 * pow(hb, 1.3));
+    // Height envelope steeper than the presence one: the tallest buildings stay in the centre, the sides stay low.
+    float tall = 0.9 * core + 0.1 * exp(-c2 * c2);
+    float height = (20.0 + 60.0 * hb) * (0.6 + 0.4 * core) + tall * (160.0 + 1150.0 * pow(hb, 1.3));
     height *= (0.8 + 0.12 * aSlot.y) * (0.95 + 0.1 * h11(id + 0.45)); // back rows stand taller behind the front
     float present = step(0.08 + 0.35 * (1.0 - env), h11(id + 0.5)); // gaps grow toward the sides
-    // Narrower than the slot spacing (about 59 units in the centre, more toward the sides), so each building keeps a
-    // visible gap to its neighbours; slender towers in the centre.
-    float width = mix(55.0 + 75.0 * h11(id + 0.2), 30.0 + 26.0 * h11(id + 0.2), core);
-    float depth = 40.0 + 50.0 * h11(id + 0.3);
+    // Close to the slot spacing (about 59 units in the centre, more toward the sides): neighbours in a row may touch,
+    // but the staggered rows stand at different radii, so the blocks read as a dense, solid skyline, not as sticks.
+    float width = mix(70.0 + 80.0 * h11(id + 0.2), 48.0 + 30.0 * h11(id + 0.2), core);
+    float depth = 55.0 + 55.0 * h11(id + 0.3);
 
     // Setback tier on some tall buildings.
     float tier = step(0.5, h11(id + 0.6)) * step(260.0, height);
