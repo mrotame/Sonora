@@ -154,6 +154,7 @@ Performance decisions must be validated by profiling on representative target de
 - The backend delivers the original m4a/AAC audio stream without re-encoding (replaces the earlier MP3 192 kbps target). It always requests the same format to keep identity differences minimal. Conversion (for example to MP3 via ffmpeg) is only a fallback when no m4a stream exists. Opus/WebM is avoided as the default because of inconsistent Safari support.
 - Initial maximum source duration: 10 minutes.
 - The resulting file is stored temporarily and is not intended to become a permanent user music library.
+- **Production acquisition (ADR 0012, 2026-11-16):** YouTube blocks yt-dlp on Cloud Run, so when `RAPIDAPI_KEY` is set the backend gets the file from third-party RapidAPI APIs tried in priority order with fallback (`server/sources.ts`): first `server/ytToMp3.ts` (YouTube's m4a stream through a relay, DASH container), then `server/rapidapi.ts` (m4a AAC 128 kbps, re-encoded by the provider). This replaces the "original stream without re-encoding" rule above in production; yt-dlp remains the fallback without a key.
 - Hosting: Cloud Run for the backend and GitHub Pages for the frontend (ADR 0011). The code must stay hosting-agnostic: provider specifics live only in the Dockerfile, the workflows, and environment variables.
 
 **DECIDED — Backend implementation**
@@ -169,7 +170,8 @@ Performance decisions must be validated by profiling on representative target de
 - `decodeAudioData` was validated only in Chromium-based browsers (Edge 157 and Brave, headless, desktop). Firefox and Safari were not tested; the supported-browser set remains **OPEN**.
 - Decoding a 10-minute synthetic track (three tracks concatenated) took about 0.75 to 1.3 s. Its canonical PCM is 202 MiB. In Brave the process memory grew by about 560 to 600 MiB for a single decode. Mobile has not been measured yet.
 - Brave's decoded samples differ between sessions (about 76 dB below signal level); Edge's are bit-identical. This motivated ADR 0009.
-- **Not yet validated:** a datacenter or hosting IP (the main blocking risk), rejection of live, private, or over-10-minute videos (no test URLs), a video without an m4a stream, and any mobile device.
+- **Datacenter IP (2026-11-16):** on Cloud Run, yt-dlp jobs fail with `BLOCKED` (YouTube bot check). Resolved by ADR 0012.
+- **Not yet validated:** rejection of live, private, or over-10-minute videos (no test URLs), a video without an m4a stream, and any mobile device.
 
 These are approved initial direction/operating parameters, subject to validation in the prototype. Realistic execution time, storage, transfer, and provider limits remain open.
 

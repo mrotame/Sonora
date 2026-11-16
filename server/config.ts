@@ -24,6 +24,9 @@ export const config = {
   readyTtlMs: num('READY_TTL_MS', 180_000),
   maxFileBytes: num('MAX_FILE_BYTES', 16 * MB),
   ytdlpPath: process.env.YTDLP_PATH ?? 'yt-dlp',
+  /** When set, audio comes from the RapidAPI conversion API instead of yt-dlp (server/rapidapi.ts). Secret. */
+  rapidApiKey: process.env.RAPIDAPI_KEY ?? '',
+  rapidApiHost: process.env.RAPIDAPI_HOST ?? 'youtube-audio-downloader-converter.p.rapidapi.com',
   tempDir: path.join(os.tmpdir(), 'sonora-jobs'),
   // Logs extractor diagnostics (may contain video ids). Off by default.
   debug: process.env.SONORA_DEBUG === '1',

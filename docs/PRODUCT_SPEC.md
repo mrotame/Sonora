@@ -268,7 +268,7 @@ The MVP does not expose seeking to the user. Arbitrary-time reconstruction remai
 **DECIDED — Identity inputs**
 
 The world identity incorporates:
-- The SHA-256 hash of the acquired audio file's bytes, exactly as delivered by the backend (the original m4a/AAC, or the MP3 fallback).
+- The SHA-256 hash of the acquired audio file's bytes, exactly as delivered by the backend (the original m4a/AAC from yt-dlp, or, in production, the m4a obtained through the third-party APIs of ADR 0012).
 - Scenario identifier.
 - Scenario version.
 - World-generation version.

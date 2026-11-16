@@ -73,6 +73,7 @@ The documentation in [docs/](docs/) is the project's source of truth:
 - [PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md): product goals, experience, and requirements.
 - [TECHNICAL_ARCHITECTURE.md](docs/TECHNICAL_ARCHITECTURE.md): modules, data flow, and conventions.
 - [TECH_STACK.md](docs/TECH_STACK.md): technology decisions (ADRs).
+- [DEPLOYMENT.md](docs/DEPLOYMENT.md): hosting, CI/CD, and operations.
 
 ## Audio acquisition notice
 

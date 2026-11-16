@@ -21,6 +21,7 @@
 | 0009 | Audio identity from the delivered file bytes (amends 0006) | DECIDED |
 | 0010 | Local audio cache in IndexedDB | DECIDED |
 | 0011 | Hosting: GitHub Pages (frontend) and Cloud Run (backend), deployed by GitHub Actions | DECIDED |
+| 0012 | Audio acquisition through third-party RapidAPI APIs with fallback (amends 0008) | DECIDED |
 
 ---
 
@@ -362,7 +363,7 @@ The project owner chose to host the backend on Google Cloud Run within the free 
 
 - Frontend: `vite build` output published to GitHub Pages (`.github/workflows/deploy-frontend.yml`), served under `/<repo>/` (`BASE_PATH`). The backend origin is injected at build time as `VITE_API_BASE_URL` from the `BACKEND_URL` repository variable; empty means same origin (development proxy).
 - Backend: Docker image built by Cloud Build and deployed to Cloud Run in `us-central1`, `max-instances=1` (`.github/workflows/deploy-backend.yml`). Authentication uses Workload Identity Federation, with no stored keys. `ALLOWED_ORIGIN` restricts browser reads (CORS) to the Pages origin.
-- Each workflow runs only when its side changes (path filters). Free-tier guards are in `deploy/gcp-free-tier-guards.sh`.
+- Each workflow runs only when its side changes (path filters). Free-tier guards are in `deploy/gcp-free-tier-guards.sh`. Operational details are in `DEPLOYMENT.md`.
 
 ## Rationale
 
@@ -373,7 +374,43 @@ The project owner chose to host the backend on Google Cloud Run within the free 
 
 - Cross-origin calls depend on CORS and on `ALLOWED_ORIGIN` matching the Pages origin.
 - Cloud Run throttles CPU outside requests and keeps `/tmp` in memory: background yt-dlp work and the egress counter (reset on cold start) still need validation.
-- yt-dlp on a datacenter IP remains unvalidated (ADR 0008).
+- yt-dlp on a datacenter IP remains unvalidated (ADR 0008). Update: it is blocked (see ADR 0012).
+
+---
+
+# ADR 0012 - Audio Acquisition Through Third-Party RapidAPI APIs, With Fallback
+
+- **Status:** DECIDED
+- **Decision date:** 2026-11-16
+- **Amends:** ADR 0008 (extractor) and the "original m4a without re-encoding" delivery rule.
+
+## Context
+
+On Cloud Run, YouTube rejects yt-dlp with its bot check ("Sign in to confirm you're not a bot"), so every job fails with `BLOCKED`. The project owner ruled out a residential host, PO-token providers, paid proxies, account cookies, and file upload, and chose the RapidAPI API "YouTube Audio Downloader & Converter" (provider `nbdy0`, host `api-youtubemp3.paulius.pro`) on its free plan. The project is expected to run only a few times a year.
+
+## Decision
+
+- When `RAPIDAPI_KEY` is set, the backend acquires audio through `server/rapidapi.ts` instead of yt-dlp: `POST /api/v2/jobs` (`format=m4a`, `quality=128`, `Idempotency-Key` = Sonora job id), long-poll `GET /api/v2/jobs/{id}?waitSeconds=25`, then stream `GET /api/v2/jobs/{id}/download` to the temp dir. The rest of the pipeline (Sonora jobs, limits, delivery, HTTP contract) is unchanged.
+- **Providers, in priority order** (owner's choice, 2026-11-16):
+  1. "YouTube to MP3 Converter API" (GatiMan, `server/ytToMp3.ts`): `POST /output.php` with multipart `url` returns JSON `medias[]` with relay links to YouTube's own streams; the m4a/AAC audio (YouTube format 140, the stream yt-dlp downloads) is picked and fetched from the relay. Free plan: 4 requests per month (observed in the response headers).
+  2. "YouTube Audio Downloader & Converter" (nbdy0, `server/rapidapi.ts`): the job API described above.
+- **Fallback chain** (`server/sources.ts`): the backend tries the configured providers in priority order (`PROVIDERS` in `server/jobs.ts`). Provider failures (generic, quota, blocked) move to the next provider; outcomes about the video itself (unavailable, live, too long, too large) stop the chain. One RapidAPI key is shared by all providers. The job timeout covers the whole chain.
+- The key is stored in GCP Secret Manager (`rapidapi-key`) and exposed to Cloud Run as `RAPIDAPI_KEY`. It never passes through GitHub and is never sent to the frontend.
+- Local development uses yt-dlp (no key set, residential IP); only the Cloud Run deployment uses the API.
+- Provider errors map to existing codes: 413 `TOO_LONG`, 422 `UNAVAILABLE`, 429 `QUOTA_EXCEEDED`, others `DOWNLOAD_FAILED`, including the provider's job error `SERVICE_TEMPORARILY_UNAVAILABLE` (retried with a new idempotency key, because the provider returns the original failed job for a repeated key; failed provider jobs did not spend a conversion when observed).
+
+## Rationale
+
+- The provider downloads from its own infrastructure and hosts the result, so the YouTube block on the Cloud Run IP no longer applies, and the file is fetched from the provider (not from a YouTube URL bound to the provider's IP).
+- The free plan's limits are hard limits, so it cannot generate charges.
+- The change is confined to the source adapter, as ADR 0008 intended.
+
+## Consequences
+
+- The first provider delivers YouTube's stream as is, but in its DASH container (no `FixupM4a` as yt-dlp applies), so its bytes, and the identity, differ from a yt-dlp download of the same video; Edge decodes it. The second provider's file is re-encoded (AAC 128 kbps in m4a), not YouTube's original stream. Identity stays the SHA-256 of the delivered bytes (ADR 0009); the same video may hash differently from a yt-dlp download, and across provider runs if its encoding is not stable (not verified). The project owner accepted this.
+- The video URL is sent to a third party. The provider's error codes and long-term availability are not guaranteed; job-error classification is a best guess.
+- The first provider's relay is run by unknown third parties (a Cloudflare Worker in front of another proxy service). Free plans: 4 requests per month (first provider) and 25 conversions / 300 requests per month (second). The local audio cache (ADR 0010) avoids spending conversions on repeated videos.
+- Processing third-party content through this service is outside YouTube's Terms of Service, as with yt-dlp.
 
 ---
 
@@ -382,3 +419,4 @@ The project owner chose to host the backend on Google Cloud Run within the free 
 - `AGENTS.md` — agent working rules and documentation authority.
 - `PRODUCT_SPEC.md` — product behavior and MVP requirements.
 - `TECHNICAL_ARCHITECTURE.md` — system boundaries, data flow, execution strategy, and unresolved architecture questions.
+- `DEPLOYMENT.md` — hosting, CI/CD workflows, and operations.

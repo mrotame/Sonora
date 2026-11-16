@@ -4,7 +4,10 @@ import path from 'node:path';
 import type { ErrorCode, JobResponse, JobStatus } from '../shared/contract.ts';
 import { config } from './config.ts';
 import { Breaker } from './limits.ts';
+import { audioDownloaderConverter } from './rapidapi.ts';
 import { withRetry } from './retry.ts';
+import { type AudioSource, downloadWithFallback } from './sources.ts';
+import { ytToMp3 } from './ytToMp3.ts';
 import { downloadAudio, fetchMetadata, SourceError } from './ytdlp.ts';
 
 // Job state lives in memory only (ADR 0008). Files live in the OS temp dir.
@@ -23,6 +26,10 @@ interface Job {
 const jobs = new Map<string, Job>();
 const queue: Job[] = [];
 let running = 0;
+
+/** Production sources, highest priority first. Used only when RAPIDAPI_KEY is set (Cloud Run).
+ * Both share the same RapidAPI key; each needs its own (free) subscription on that account. */
+const PROVIDERS: readonly AudioSource[] = [ytToMp3, audioDownloaderConverter];
 
 /** Stops hitting the source after repeated blocks (see limits.ts). */
 export const breaker = new Breaker(config.breakerThreshold, config.breakerPauseMs);
@@ -93,6 +100,15 @@ async function run(job: Job): Promise<void> {
     if (breaker.isOpen()) throw new SourceError('BLOCKED'); // queued before the pause began
     job.filePath = await withRetry(async () => {
       removeFiles(job.id); // a failed attempt may leave partial files
+      if (config.rapidApiKey) {
+        // Third-party APIs in priority order (datacenter IPs are blocked by YouTube, ADR 0012).
+        job.status = 'fetching_metadata';
+        return downloadWithFallback(PROVIDERS, job.videoId, job.id, job.abort.signal, {
+          onDownloading: () => (job.status = 'downloading'),
+        }, (name, code) => {
+          if (config.debug) console.error(`[job] source ${name} failed (${code}), trying the next one`);
+        });
+      }
       job.status = 'fetching_metadata';
       const meta = await fetchMetadata(job.videoId, job.abort.signal);
       if (meta.isLive) throw new SourceError('LIVE');
