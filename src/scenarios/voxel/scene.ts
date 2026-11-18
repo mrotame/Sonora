@@ -11,7 +11,10 @@ import * as THREE from 'three';
 import type { ScenarioScene } from '../types.ts';
 import { TERRAIN } from './terrain.ts';
 import type { MeshArrays } from './mesher.ts';
-import { voxelLogic, type VoxelParams, type VoxelSegment } from './logic.ts';
+import { RAILS_NONE, voxelLogic, type VoxelParams, type VoxelSegment } from './logic.ts';
+import { CART_FRAGMENT, CART_PIVOT, CART_VERTEX, minecartGeometry } from './minecart.ts';
+import { RAILS, smoothRailSlopeAt } from './rails.ts';
+import { ROAD } from './road.ts';
 import type { FarSegment } from './far.ts';
 import minecartUrl from './textures/minecart.png';
 import { FLAGS_GLSL } from './blocks.ts';
@@ -461,50 +464,6 @@ const CUBE_FRAGMENT = /* glsl */ `
 /** Half-length (m) of the flash along the road around a portal: about 0.6 s at cruise speed. */
 const FLASH_HALF = 10;
 
-/** Minecart: floor and four walls of the entity texture (128 x 64), in cart space: x across, y up, -z forward. */
-function minecartGeometry(): THREE.BufferGeometry {
-  const pos: number[] = [], uv: number[] = [], idx: number[] = [];
-  const W = 0.7, Lh = 0.9, floorY = 0.28, top = 0.62;
-  const quad = (c: number[], rect: [number, number, number, number]) => {
-    const n = pos.length / 3;
-    pos.push(...c);
-    const [u0, v0, u1, v1] = rect;
-    uv.push(u0 / 128, 1 - v1 / 64, u1 / 128, 1 - v1 / 64, u1 / 128, 1 - v0 / 64, u0 / 128, 1 - v0 / 64);
-    idx.push(n, n + 1, n + 2, n, n + 2, n + 3);
-  };
-  const wall: [number, number, number, number] = [4, 4, 36, 20];
-  quad([-W, floorY, Lh, W, floorY, Lh, W, top, Lh, -W, top, Lh], wall);
-  quad([-W, floorY, -Lh, W, floorY, -Lh, W, top, -Lh, -W, top, -Lh], wall);
-  quad([-W, floorY, -Lh, -W, floorY, Lh, -W, top, Lh, -W, top, -Lh], wall);
-  quad([W, floorY, -Lh, W, floorY, Lh, W, top, Lh, W, top, -Lh], wall);
-  quad([-W, floorY, -Lh, W, floorY, -Lh, W, floorY, Lh, -W, floorY, Lh], [4, 24, 44, 56]);
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-  g.setIndex(idx);
-  return g;
-}
-
-// Minecart (Nether only, lit by the lava below): the entity texture, linear, with an opaque alpha for the composite.
-const CART_VERTEX = /* glsl */ `
-  varying vec2 vUv;
-  void main() {
-    vUv = uv;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-  }
-`;
-const CART_FRAGMENT = /* glsl */ `
-  precision highp float;
-  uniform sampler2D tCart;
-  uniform vec3 uAmbDown;
-  varying vec2 vUv;
-  void main() {
-    vec4 t = texture2D(tCart, vUv);
-    if (t.a < 0.5) discard;
-    gl_FragColor = vec4(pow(t.rgb * vec3(0.6, 0.6, 0.66), vec3(2.2)) * (uAmbDown * 2.5 + 0.08), 1.0);
-  }
-`;
-
 interface SegmentMeshes {
   /** Overworld meshes (shown while the camera is in the overworld) and Nether meshes (shown inside the Nether). */
   meshes: THREE.Mesh[];
@@ -514,6 +473,9 @@ interface SegmentMeshes {
   nether0: number;
   portals: number[];
   cavePulse: CavePulse;
+  /** Nether rail deck layers (offsets) of rows start - 1 .. start + length (VoxelSegment.rails). */
+  rails: Int16Array | null;
+  start: number;
 }
 
 const setRGB = (c: THREE.Color, v: RGB) => c.setRGB(v[0], v[1], v[2]);
@@ -560,9 +522,12 @@ export class VoxelScene implements ScenarioScene {
   private readonly cubeMaterial: THREE.ShaderMaterial;
   private readonly cart: THREE.Mesh;
   private readonly cartMaterial: THREE.ShaderMaterial;
-  private readonly cartTexture: THREE.Texture;
-  private readonly lastCam = new THREE.Vector3();
-  private cartSlope = 0;
+  private cartTexture!: THREE.Texture;
+  /** Resolves once the minecart texture is loaded (or failed), so the first Nether frame never shows a cart without it. */
+  private readonly cartLoaded: Promise<void>;
+  /** The minecart has a scene of its own, drawn over the world with a close near plane (see render). */
+  private readonly cartScene = new THREE.Scene();
+  private readonly cartCamera = new THREE.PerspectiveCamera();
   private inNether = false;
   private energy = 0.5;
   private cloudGlow = 0.5;
@@ -636,7 +601,9 @@ export class VoxelScene implements ScenarioScene {
     this.cubes.frustumCulled = false;
     this.scene.add(this.cubes);
 
-    this.cartTexture = new THREE.TextureLoader().load(minecartUrl);
+    this.cartLoaded = new Promise<void>((resolve) => {
+      this.cartTexture = new THREE.TextureLoader().load(minecartUrl, () => resolve(), undefined, () => resolve());
+    });
     this.cartTexture.magFilter = THREE.NearestFilter;
     this.cartTexture.minFilter = THREE.NearestFilter;
     this.cartTexture.colorSpace = THREE.NoColorSpace;
@@ -649,11 +616,12 @@ export class VoxelScene implements ScenarioScene {
     this.cart = new THREE.Mesh(minecartGeometry(), this.cartMaterial);
     this.cart.frustumCulled = false;
     this.cart.visible = false;
-    this.scene.add(this.cart);
+    this.cart.rotation.order = 'YXZ';
+    this.cartScene.add(this.cart);
   }
 
   ready(): Promise<void> {
-    return this.atlas.loaded;
+    return Promise.all([this.atlas.loaded, this.cartLoaded]).then(() => undefined);
   }
 
   private meshOf(data: MeshArrays, startDistance: number, material: THREE.ShaderMaterial, order: number): THREE.Mesh | null {
@@ -696,7 +664,7 @@ export class VoxelScene implements ScenarioScene {
       ? [this.netherMeshOf(seg.nether.solid, this.solidMaterial, 0), this.netherMeshOf(seg.nether.cross, this.crossMaterial, 1)].filter((m): m is THREE.Mesh => m !== null)
       : [];
     for (const mesh of [...meshes, ...nether]) this.scene.add(mesh);
-    this.segments.set(index, { meshes, nether, mood: seg.mood, hour: seg.hour, nether0: seg.nether0, portals: seg.portals, cavePulse: seg.cavePulse });
+    this.segments.set(index, { meshes, nether, mood: seg.mood, hour: seg.hour, nether0: seg.nether0, portals: seg.portals, cavePulse: seg.cavePulse, rails: seg.rails, start: Math.round(startDistance) });
   }
 
   removeSegment(index: number): void {
@@ -772,6 +740,32 @@ export class VoxelScene implements ScenarioScene {
     return state;
   }
 
+  /** Deck layer (absolute) of the Nether rails at row bd from the loaded segments, or null. */
+  private readonly railLayerAt = (bd: number): number | null => {
+    const seg = this.segments.get(Math.floor(bd / SEGMENT_LENGTH));
+    const v = seg?.rails?.[bd - seg.start + 1];
+    return v === undefined || v === RAILS_NONE ? null : ROAD.layer + v;
+  };
+
+  /**
+   * Minecart under the camera, tilted as the rail blocks below it are, as in the block game: level on the flat rails and
+   * 45 degrees on the ramps, the change rounded over 0.6 m (rails.ts). A pure function of the camera position and the
+   * loaded segments.
+   */
+  private poseCart(cameraPosition: THREE.Vector3): void {
+    const distance = -cameraPosition.z;
+    const slope = this.inNether ? smoothRailSlopeAt(this.railLayerAt, distance) : null;
+    this.cart.visible = slope !== null;
+    if (slope === null) return;
+    // Under the camera, which rides the smooth grade (path.ts), at the seated eye height: the rail point is RAILS.eyeAbove
+    // under the eye. Climbing toward -z (the travel direction) is a positive rotation about x; the pivot sits CART_PIVOT
+    // over that point along the rail's normal.
+    const pitch = Math.atan(slope);
+    const y = cameraPosition.y - RAILS.eyeAbove;
+    this.cart.rotation.set(pitch, 0, 0);
+    this.cart.position.set(0, y + CART_PIVOT * Math.cos(pitch), -distance + CART_PIVOT * Math.sin(pitch));
+  }
+
   /** Flash intensity (0..1) from the distance to the nearest portal of the loaded segments. */
   private flashAt(distance: number): number {
     let best = FLASH_HALF;
@@ -795,13 +789,7 @@ export class VoxelScene implements ScenarioScene {
     this.cubeMaterial.uniforms.uKick!.value = p.cubeKick;
     this.cubeMaterial.uniforms.uCubeGlow!.value = p.cubeGlow;
     this.flash = this.flashAt(distance);
-    // Minecart: rides at the camera, pitched with the road slope (estimated from the last frame's motion, smoothed).
-    this.cart.visible = this.inNether;
-    const dd = this.lastCam.z - cameraPosition.z;
-    if (dd > 1e-3 && dd < 20) this.cartSlope += ((cameraPosition.y - this.lastCam.y) / dd - this.cartSlope) * 0.25;
-    this.lastCam.copy(cameraPosition);
-    this.cart.position.set(0, cameraPosition.y - 1.5, cameraPosition.z + 0.15);
-    this.cart.rotation.x = Math.atan(this.cartSlope);
+    this.poseCart(cameraPosition);
     this.mood = this.bakedAt(distance, (s) => s.mood, this.mood);
     this.hour = this.bakedAt(distance, (s) => s.hour, this.hour);
 
@@ -870,12 +858,25 @@ export class VoxelScene implements ScenarioScene {
       // The eye adapts fast as the sun rises: full day exposure from a quarter of the day factor on.
       exposure: this.inNether ? EXPOSURE.nether : EXPOSURE.night + (EXPOSURE.day - EXPOSURE.night) * THREE.MathUtils.smoothstep(day, 0, 0.3),
       flash: this.flash,
+      overlay: this.cart.visible ? { scene: this.cartScene, camera: this.cartCameraFor(camera) } : undefined,
     });
+  }
+
+  /** The world camera with a near plane of 2 cm: the cart, under the eye, is never cut by the world's 0.5 m near plane. */
+  private cartCameraFor(camera: THREE.PerspectiveCamera): THREE.PerspectiveCamera {
+    const c = this.cartCamera;
+    c.copy(camera, false);
+    c.near = 0.02;
+    c.far = 10;
+    c.updateProjectionMatrix();
+    c.updateMatrixWorld();
+    return c;
   }
 
   dispose(): void {
     for (const index of [...this.segments.keys()]) this.removeSegment(index);
     for (const index of [...this.farSegments.keys()]) this.removeFarSegment(index);
+    this.cartScene.remove(this.cart);
     for (const mesh of [this.sky, this.cubes, this.cart]) {
       this.scene.remove(mesh);
       mesh.geometry.dispose();

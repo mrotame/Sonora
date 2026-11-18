@@ -2,8 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { analyzeTrack } from '../src/audio/analysis/analyze.ts';
 import { Timeline } from '../src/audio/intelligence/timeline.ts';
-import { voxelLogic, type VoxelSegment } from '../src/scenarios/voxel/logic.ts';
-import { PACE, createVoxelPath, fovForSpeed, voxelTerrain } from '../src/scenarios/voxel/path.ts';
+import { RAILS_NONE, voxelLogic, type VoxelSegment } from '../src/scenarios/voxel/logic.ts';
+import { PACE, createVoxelPath, fovForSpeed, netherRails, netherRailsOf, voxelTerrain } from '../src/scenarios/voxel/path.ts';
+import { RAILS, quantizeRails, railSurfaceAt, smoothRailSlopeAt } from '../src/scenarios/voxel/rails.ts';
+import { CART_PIVOT, minecartGeometry } from '../src/scenarios/voxel/minecart.ts';
 import { FAR, FAR_EDGES, buildFarSegment, cellSizeAt } from '../src/scenarios/voxel/far.ts';
 import { B, BAND, BLOCKS, FLAG, LAYER, LIGHT_EMIT, hasFlag, materialFlags } from '../src/scenarios/voxel/blocks.ts';
 import { buildVolume } from '../src/scenarios/voxel/chunk.ts';
@@ -56,6 +58,16 @@ const seedOf = (key: string) => createWorldSeed({ audioIdentity: key.repeat(64),
 const worldSeed = seedOf('a');
 const path = createVoxelPath(timeline, worldSeed);
 const L = voxelLogic.config.segmentLength;
+
+/** The Nether rail deck offsets of visit `iv` of a timeline (the bridge's `deckOffsetAt`), null outside the visit. */
+function railOffsets(tl: Timeline, iv: { t0: number }): (bd: number) => number | null {
+  const rails = netherRails(tl);
+  const k = rails.visits.findIndex((v) => v.t0 === iv.t0);
+  return (bd) => {
+    const v = rails.visits[k]!, i = bd - v.first;
+    return i >= 0 && i < v.layers.length ? v.layers[i]! - ROAD.layer : null;
+  };
+}
 
 function input(index: number, seed = worldSeed, p = path, tl = timeline): SegmentInput {
   return { index, startDistance: index * L, length: L, worldSeed: seed, seed: deriveSeed(seed, 'segment', index), timeline: tl, speed: voxelLogic.config.speed, path: p };
@@ -237,7 +249,7 @@ test('voxel path: in the Nether the rails climb and descend with the music, fast
   const slopes = samples.map((s) => s.slope);
   assert.ok(Math.min(...slopes) < -0.3, `a steep descent (${Math.min(...slopes)})`);
   assert.ok(Math.max(...slopes) > 0.02, `and a stretch that climbs (${Math.max(...slopes)})`);
-  assert.ok(Math.max(...slopes) <= 0.28 + 1e-9 && Math.min(...slopes) >= -0.6 - 1e-9, 'slopes stay within their limits');
+  assert.ok(Math.max(...slopes) <= 0.28 + 1e-9 && Math.min(...slopes) >= -1 - 1e-9, 'slopes stay within their limits');
   const steep = samples.filter((s) => s.slope < -0.3), gentle = samples.filter((s) => s.slope > -0.1);
   const mean = (a: { speed: number }[]) => a.reduce((x, s) => x + s.speed, 0) / Math.max(1, a.length);
   assert.ok(steep.length > 0 && gentle.length > 0 && mean(steep) > mean(gentle) * 1.15, 'faster on the steep descents than on the level or climbing stretches');
@@ -844,10 +856,7 @@ test('voxel Nether: the rails of a whole visit always connect, inside segments a
   const p = createVoxelPath(tl, worldSeed);
   const t = voxelTerrain(tl, worldSeed);
   const iv = scheduleOf(tl).intervals[0]!;
-  const offsetAt = (bd: number): number | null => {
-    const tt = p.timeAt(bd + 0.5);
-    return tt >= iv.t0 && tt < iv.t1 ? p.heightAt(tt) : null;
-  };
+  const offsetAt = railOffsets(tl, iv);
   const first = Math.floor(p.distanceAt(iv.t0) / L), last = Math.floor(p.distanceAt(iv.t1) / L);
   const edges = new Map<number, number[]>();
   let up = 0, down = 0, rows = 0;
@@ -868,7 +877,7 @@ test('voxel Nether: the rails of a whole visit always connect, inside segments a
   const joints = assertRailsConnect(edges);
   assert.ok(rows > 200 && joints > 200, `a long track was checked (${rows} rows, ${joints} joints)`);
   assert.ok(up > 0 && down > 0, `the track climbs (${up} ramps) and descends (${down} ramps)`);
-  // Only the two ends of the visit are loose: everything else is one continuous track.
+  // Only the two ends of the rails are loose: everything else is one continuous track.
   assert.equal([...edges.values()].filter((ys) => ys.length === 1).length, 2);
 });
 
@@ -877,9 +886,9 @@ test('voxel: the exit portal stands on the Nether bridge, as the entry one does'
   const iv = scheduleOf(timeline).intervals[0]!;
   for (const tt of [iv.t0, iv.t1 - 1e-3]) {
     const bd = Math.floor(path.distanceAt(tt));
-    const offsetAt = (b: number) => { const x = path.timeAt(b + 0.5); return x >= iv.t0 && x < iv.t1 ? path.heightAt(x) : null; };
+    const offsetAt = railOffsets(timeline, iv);
     const start = Math.floor(bd / L) * L;
-    const v = buildNetherVolume(t, start, L, offsetAt, [{ bd, offset: path.heightAt(tt) }], 0);
+    const v = buildNetherVolume(t, start, L, offsetAt, [{ bd, offset: offsetAt(bd) ?? offsetAt(bd + 1)! }], 0);
     assert.ok(v, 'the segment has Nether rows');
     assert.ok(v!.data.some((id) => id === B.portal), `portal blocks at the ${tt === iv.t0 ? 'entry' : 'exit'}`);
   }
@@ -1029,7 +1038,7 @@ test('voxel Nether: without usable beats the posts fall back to an even spacing'
 test('voxel Nether: the light posts stand on the bridge, a fence column from the deck up to the lamp', () => {
   const iv = scheduleOf(timeline).intervals[0]!;
   const t = voxelTerrain(timeline, worldSeed);
-  const offsetAt = (bd: number): number | null => { const x = path.timeAt(bd + 0.5); return x >= iv.t0 && x < iv.t1 ? path.heightAt(x) : null; };
+  const offsetAt = railOffsets(timeline, iv);
   const first = Math.floor(path.distanceAt(iv.t0) / L) + 1;
   let posts = 0;
   for (let s = first; s < first + 3; s++) {
@@ -1159,7 +1168,7 @@ test('voxel Nether: glowstone is in view all along a visit, also where low rock 
   for (const key of ['a', 'b', 'c']) {
     const seed = seedOf(key), p = createVoxelPath(tl, seed), t = voxelTerrain(tl, seed);
     const iv = scheduleOf(tl).intervals[0]!;
-    const offsetAt = (bd: number): number | null => { const tt = p.timeAt(bd + 0.5); return tt >= iv.t0 && tt < iv.t1 ? p.heightAt(tt) : null; };
+    const offsetAt = railOffsets(tl, iv);
     const d0 = Math.ceil(p.distanceAt(iv.t0)) + 10, d1 = Math.floor(p.distanceAt(iv.t1)) - REACH - 10;
     const len = d1 - d0 + REACH + 2;
     const { data, sx, sy, sz, ox, oy } = buildNetherVolume(t, d0, len, offsetAt, [], 0)!;
@@ -1179,7 +1188,7 @@ test('voxel Nether: glowstone is in view all along a visit, also where low rock 
     }
     let worst = Infinity;
     for (let cam = d0; cam < d1; cam += STEP) {
-      const ey = deckLayer(offsetAt(cam)!) + EYE;
+      const ey = ROAD.layer + offsetAt(cam)! + EYE;
       let seen = 0;
       for (let bd = cam + 2; bd < cam + REACH && seen < MIN_VISIBLE; bd++) for (const [bx, y] of byRow.get(bd) ?? []) {
         const vx = bx + 0.5, vy = y + 0.5 - ey, dz = bd + 0.5 - cam, dist = Math.hypot(vx, vy, dz);
@@ -1193,4 +1202,86 @@ test('voxel Nether: glowstone is in view all along a visit, also where low rock 
     }
     assert.ok(worst >= MIN_VISIBLE, `world ${key}: some stop of the visit sees only ${worst} glowstone blocks`);
   }
+});
+
+test('voxel rails: the grade becomes runs of 45 degree ramps with level rows between them, within a band under the grade', () => {
+  for (const grade of [-1, -0.6, -0.3, -0.05, 0.28]) {
+    const target = Array.from({ length: 400 }, (_, i) => grade * i + 0.8 * Math.sin(i / 11));
+    const q = quantizeRails(target);
+    let runs = 0, rampRows = 0, lo = 0, hi = 0;
+    for (let i = 1; i < q.length; i++) {
+      const step = q[i]! - q[i - 1]!;
+      assert.ok(Math.abs(step) <= 1, 'at most one layer per row');
+      // A ramp toward both neighbours (a one-row pit or peak) cannot be built.
+      if (i + 1 < q.length) assert.ok(!(q[i - 1]! > q[i]! && q[i + 1]! > q[i]!) && !(q[i - 1]! < q[i]! && q[i + 1]! < q[i]!), `row ${i}: a one-row pit or peak`);
+      if (step !== 0) { rampRows++; if (q[i - 1]! - q[i - 2 < 0 ? 0 : i - 2]! !== step) runs++; }
+      lo = Math.min(lo, q[i]! - target[i]!);
+      hi = Math.max(hi, q[i]! - target[i]!);
+    }
+    // Within the band, give or take one row of a reversal (the level row it needs).
+    assert.ok(lo >= -RAILS.below - 1.3 && hi <= RAILS.above + 1.3, `grade ${grade}: rails between ${lo.toFixed(2)} and ${hi.toFixed(2)} of it`);
+    if (Math.abs(grade) > 0.5) assert.ok(rampRows / runs >= 2.5, `grade ${grade}: ramps come in runs (${(rampRows / runs).toFixed(1)} rows each)`);
+  }
+  assert.deepEqual([...quantizeRails([0.2, -0.3, 0.4, 0.1])], [0, 0, 0, 0], 'small wiggles stay level');
+});
+
+test('voxel rails: the rail surface is level on flat rows and climbs 1 m over a ramp row; smoothed, the slope is 0 or 1', () => {
+  const layers = new Map([[0, 4], [1, 4], [2, 4], [3, 5], [4, 6], [5, 6], [6, 6]]);
+  const at = (bd: number) => layers.get(bd) ?? null;
+  // Row 2 ramps up to row 3 (one layer up, toward +d), so its surface runs from 5 to 6.
+  assert.equal(railSurfaceAt(at, 1.5), 5);
+  assert.equal(railSurfaceAt(at, 2.25), 5.25);
+  assert.equal(railSurfaceAt(at, 3.5), 6.5);
+  assert.equal(railSurfaceAt(at, 5.5), 7);
+  assert.equal(railSurfaceAt(at, 9), null);
+  assert.ok(Math.abs(smoothRailSlopeAt(at, 1)!) < 1e-9);
+  assert.ok(Math.abs(smoothRailSlopeAt(at, 3)! - 1) < 1e-9);
+  const s = smoothRailSlopeAt(at, 2 + RAILS.smoothM / 2)!;
+  assert.ok(s > 0 && s < 1, 'the corner is rounded');
+});
+
+test('voxel Nether: the camera rides the smooth wave, seated over rails that keep within their band; ramps and level rails', () => {
+  const tl = pulsingTrack(20, 80, 110);
+  const p = createVoxelPath(tl, worldSeed);
+  const iv = scheduleOf(tl).intervals[0]!;
+  const rails = netherRailsOf(p)!;
+  assert.equal(rails, netherRails(tl), 'the path rides the timeline\'s rail table');
+  let ramps = 0, flats = 0;
+  for (let t = iv.t0 + 0.5; t < iv.t1 - 0.5; t += 0.05) {
+    const d = p.distanceAt(t);
+    const surface = railSurfaceAt(rails.layerAt, d)!;
+    const eye = voxelLogic.config.eyeHeight + p.heightAt(t);
+    // The rails stay in a band under the seated eye: never up through the cart, never far below it.
+    const gap = eye - RAILS.eyeAbove - surface;
+    assert.ok(gap >= -RAILS.above - 1.1 && gap <= RAILS.below + 1.3, `t=${t.toFixed(2)}: the rails ${gap.toFixed(2)} m under the cart`);
+    const slope = smoothRailSlopeAt(rails.layerAt, d)!;
+    if (Math.abs(Math.abs(slope) - 1) < 1e-9) ramps++;
+    else if (Math.abs(slope) < 1e-9) flats++;
+  }
+  assert.ok(ramps > 50 && flats > 50, `the cart rides 45 degree ramps (${ramps}) and level rails (${flats})`);
+  // The segment descriptors carry the same rails, for the minecart.
+  const index = Math.floor(p.distanceAt((iv.t0 + iv.t1) / 2) / L);
+  const seg = voxelLogic.generateSegment(input(index, worldSeed, p, tl));
+  assert.ok(seg.rails && seg.rails.length === L + 2);
+  for (let i = 0; i < seg.rails!.length; i++) {
+    const l = rails.layerAt(index * L - 1 + i);
+    assert.equal(seg.rails![i], l === null ? RAILS_NONE : l - ROAD.layer);
+  }
+  // No rails, no rail table in the overworld segments of a world without a Nether.
+  assert.equal(voxelLogic.generateSegment(input(0, worldSeed, createVoxelPath(track([], 30), worldSeed), track([], 30))).rails, null);
+});
+
+test('voxel minecart: the block game proportions (20 x 16 x 10 px), walls 2 px thick, uv inside the texture', () => {
+  const g = minecartGeometry();
+  g.computeBoundingBox();
+  const { min, max } = g.boundingBox!;
+  const close = (a: number, b: number) => Math.abs(a - b) < 1e-6;
+  assert.ok(close(max.x - min.x, 1) && close(max.z - min.z, 1.25) && close(max.y - min.y, 0.625), 'one block wide, 1.25 long, 0.625 tall');
+  assert.ok(close(min.y + CART_PIVOT, 0.0625), 'the floor rides 1/16 over the rail');
+  assert.equal(g.getIndex()!.count / 6, 30, 'five boxes, six faces each');
+  const n = g.getAttribute('normal'), pos = g.getAttribute('position'), uv = g.getAttribute('uv');
+  const up = new Set<string>();
+  for (let i = 0; i < n.count; i++) if (n.getY(i) > 0.99) up.add((pos.getY(i) + CART_PIVOT).toFixed(4));
+  assert.deepEqual([...up].sort(), ['0.1875', '0.6875'], 'the floor top 2 px up, the wall rims 11 px up');
+  for (let i = 0; i < uv.count * 2; i++) assert.ok(uv.array[i]! >= 0 && uv.array[i]! <= 1);
 });

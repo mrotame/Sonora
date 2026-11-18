@@ -12,13 +12,16 @@ import type { ScenarioLogic, SegmentInput } from '../types.ts';
 import { cavePulse, type CavePulse } from './cavePulse.ts';
 import { buildVolume } from './chunk.ts';
 import { buildFarSegment, FAR, type FarSegment } from './far.ts';
-import { buildNetherVolume, NETHER, placePortal } from './nether.ts';
+import { buildNetherVolume, placePortal } from './nether.ts';
 import { isPostRow, netherPostRows } from './netherPosts.ts';
 import { LIGHT_REACH } from './light.ts';
 import { meshVolume, type MeshArrays } from './mesher.ts';
-import { createVoxelPath, moodAt, voxelTerrain } from './path.ts';
+import { createVoxelPath, moodAt, netherRails, voxelTerrain } from './path.ts';
 import { deckLayer, profileAt, ROAD_SURFACE_Y, ROAD } from './road.ts';
 import { hourAt, netherAt, scheduleOf } from './schedule.ts';
+
+/** Value of `VoxelSegment.rails` on rows without rails. */
+export const RAILS_NONE = -32768;
 
 export interface VoxelSegment {
   /** Opaque blocks (and lava). */
@@ -33,6 +36,11 @@ export interface VoxelSegment {
   hour: [number, number];
   /** Nether blocks of the segment (null when no row of it is in the Nether). */
   nether: { solid: MeshArrays; cross: MeshArrays } | null;
+  /**
+   * Nether rail deck layer (offset from ROAD.layer) of the rows startRow - 1 .. startRow + length, RAILS_NONE where there
+   * are none; null when no Nether is scheduled. The scene poses the minecart on these rails.
+   */
+  rails: Int16Array | null;
   /** 1 when the segment starts inside the Nether. */
   nether0: number;
   /** Distances (m) of the portals (entries and exits alternate) that lie in the segment. */
@@ -67,14 +75,14 @@ function generateSegment(input: SegmentInput): VoxelSegment {
 
   // Portals (distance of every entry and exit) and the rows they stand on.
   const portals: number[] = [];
-  const portalRows: { bd: number; tt: number }[] = [];
-  for (const iv of schedule.intervals) {
-    for (const [tt, nether] of [[iv.t0, false], [iv.t1, true]] as const) {
+  const portalRows: { bd: number; visit: number }[] = [];
+  for (const [visit, iv] of schedule.intervals.entries()) {
+    for (const tt of [iv.t0, iv.t1]) {
       const d = dAt(tt);
       if (d >= input.startDistance && d < input.startDistance + input.length) portals.push(d);
       const bd = Math.floor(d);
       // Also the rows of the light margin, so a portal next door lights this segment exactly as its own.
-      if (bd >= startRow - 1 - LIGHT_REACH && bd <= startRow + input.length + LIGHT_REACH) portalRows.push({ bd, tt: nether ? tt - 1e-3 : tt });
+      if (bd >= startRow - 1 - LIGHT_REACH && bd <= startRow + input.length + LIGHT_REACH) portalRows.push({ bd, visit });
     }
   }
 
@@ -88,23 +96,15 @@ function generateSegment(input: SegmentInput): VoxelSegment {
   for (const { bd } of portalRows) placePortal(setWorld, deckLayer(profileAt(t, bd).offset), bd);
   const meshes = meshVolume(volume);
 
-  // The Nether: rows whose track time is inside an interval, relative to the rail height of the path, and a level tail of
-  // NETHER.exitTail rows past every exit portal (at the rail height of the exit, never into the next visit), so the
-  // cavern goes on behind the exit portal up to the haze. Only seen from inside the Nether: past the portal the scene
-  // shows the overworld.
+  // The Nether: the rows of the rail table (path.ts netherRails: every visit and a level tail of NETHER.exitTail rows past
+  // its exit portal, so the cavern goes on behind it up to the haze), built relative to the rail height of each row.
+  // Only seen from inside the Nether: past the portal the scene shows the overworld.
   let nether: VoxelSegment['nether'] = null;
+  let rails: Int16Array | null = null;
   if (path && schedule.intervals.length > 0) {
-    const tails = schedule.intervals.map((iv, k) => {
-      const d1 = dAt(iv.t1), next = schedule.intervals[k + 1];
-      return { d1, end: Math.min(d1 + NETHER.exitTail, next ? dAt(next.t0) : Infinity), offset: path.heightAt(iv.t1 - 1e-3) };
-    });
-    const offsetAt = (bd: number): number | null => {
-      const tt = path.timeAt(bd + 0.5);
-      if (schedule.intervals.some((iv) => tt >= iv.t0 && tt < iv.t1)) return path.heightAt(tt);
-      const tail = tails.find((v) => bd + 0.5 >= v.d1 && bd + 0.5 < v.end);
-      return tail ? tail.offset : null;
-    };
-    const portalAt = portalRows.map(({ bd, tt }) => ({ bd, offset: path.heightAt(tt) }));
+    const table = netherRails(input.timeline);
+    const offsetAt = (bd: number): number | null => { const l = table.layerAt(bd); return l === null ? null : l - ROAD.layer; };
+    const portalAt = portalRows.map(({ bd, visit }) => ({ bd, offset: table.layerNear(visit, bd) - ROAD.layer }));
     // Light posts on the rows the camera passes on a beat (netherPosts.ts).
     const posts = netherPostRows(input.timeline, path);
     const vol = buildNetherVolume(t, startRow, input.length, offsetAt, portalAt, LIGHT_REACH, (bd) => isPostRow(posts, bd));
@@ -112,12 +112,16 @@ function generateSegment(input: SegmentInput): VoxelSegment {
       const m = meshVolume(vol, null, false); // no sky in the Nether: only block light
       nether = { solid: m.solid, cross: m.cross };
     }
+    // The deck layer of every row of the segment and one on each side, for the minecart's pose in the scene.
+    rails = new Int16Array(input.length + 2);
+    for (let i = 0; i < rails.length; i++) rails[i] = offsetAt(startRow - 1 + i) ?? RAILS_NONE;
   }
 
   const tStart = tAt(input.startDistance), tEnd = tAt(input.startDistance + input.length);
   return {
     ...meshes,
     nether,
+    rails,
     hour: [hourAt(schedule, tStart), hourAt(schedule, tEnd)],
     nether0: netherAt(schedule, tStart) ? 1 : 0,
     portals,
@@ -189,7 +193,9 @@ export const voxelLogic: ScenarioLogic<VoxelParams, VoxelSegment> = {
   // block game's level view), so the Nether posts, placed by when they leave the screen, move with it.
   // 32: smaller glowstone clusters under the low Nether overhangs near the bridge (NETHER.lowGlow), so no stretch of a
   // visit is left without glowstone in view where the rock hides the high roofs.
-  version: 32,
+  // 33: Nether rails in runs of 45 degree ramps with level stretches between them (rails.ts); the camera and the minecart
+  // ride those blocks (the eye seated 1.4 m over the deck); the minecart is a box model posed on the rails.
+  version: 33,
   // `speed` is only the fallback for code without a path (tests); the real pace comes from createPath (see path.ts).
   // The detailed segments: 8 ahead (512 m = 32 chunks), 2 behind, 384 blocks (24 chunks) to each side (TERRAIN.halfWidth).
   // Beyond them the far field (far.ts) carries the terrain to the end of the fog; the far plane covers its corners.

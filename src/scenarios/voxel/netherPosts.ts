@@ -10,6 +10,7 @@ import type { Timeline } from '../../audio/intelligence/timeline.ts';
 import type { TrackPath } from '../types.ts';
 import { bassBeatTimes, beatsUpTo } from './beats.ts';
 import { NETHER } from './nether.ts';
+import { netherRailsOf } from './path.ts';
 import { deckLayer, ROAD } from './road.ts';
 import { scheduleOf } from './schedule.ts';
 
@@ -73,8 +74,8 @@ function onScreen(path: TrackPath, bd: number, dl: number, t: number): boolean {
   return false;
 }
 
-/** Deck layer of the rails at row bd (the rail height of the path when the camera is there). */
-const deckAt = (path: TrackPath, bd: number) => deckLayer(path.heightAt(path.timeAt(bd + 0.5)));
+/** Deck layer of the rails at row bd: the path's rail table (a path without one: its height when the camera is there). */
+const deckAt = (path: TrackPath, bd: number) => netherRailsOf(path)?.layerAt(bd) ?? deckLayer(path.heightAt(path.timeAt(bd + 0.5)));
 
 /**
  * Track time at which the post on row bd leaves the screen: the last moment it is in view before the camera passes it

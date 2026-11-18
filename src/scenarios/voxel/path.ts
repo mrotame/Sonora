@@ -11,7 +11,9 @@
 import { SILENCE_LEVEL, type Timeline } from '../../audio/intelligence/timeline.ts';
 import type { Seed } from '../../world/identity/seed.ts';
 import type { TrackPath } from '../types.ts';
-import { bridgeOffsetAt, bridgeSlopeAt } from './road.ts';
+import { NETHER } from './nether.ts';
+import { quantizeRails, RAILS } from './rails.ts';
+import { bridgeOffsetAt, bridgeSlopeAt, ROAD } from './road.ts';
 import { caveMask } from './caveMask.ts';
 import { scheduleOf } from './schedule.ts';
 import { saltsFor, withCaves, type TerrainSalts } from './terrain.ts';
@@ -56,11 +58,15 @@ const KMH_TO_UNITS_PER_S = 1 / 3.6;
  * quicker than climbs, so each visit still goes down as a whole, into the depths.
  */
 export const NETHER_PATH = {
-  /** Steepest slopes (rise over run): descents (negative) are steeper than climbs. */
-  maxDescent: -0.6,
+  /**
+   * Steepest slopes (rise over run): descents (negative) are steeper than climbs. 2026-11-18 (user-requested: more
+   * responsive to the music, dropping more levels at once): -1 (45 degrees, the steepest a rail can go; was -0.6), the
+   * gain doubled (2.2 -> 4.4), a quicker tip into a descent (0.35 -> 0.2 s) and a shorter context (8 -> 4 s). PROPOSED.
+   */
+  maxDescent: -1,
   maxClimb: 0.28,
   /** Slope per unit of intensity difference; a climb needs about twice the difference of a descent for the same slope. */
-  slopeGain: 2.2,
+  slopeGain: 4.4,
   climbScale: 0.5,
   /** Intensity quantile of the visit that rides level (below 0.5: more descent than climb). */
   pivotQuantile: 0.4,
@@ -68,9 +74,9 @@ export const NETHER_PATH = {
   absoluteWeight: 1,
   contrastWeight: 0.8,
   /** Half-width (s) of each of two centered box passes for the surrounding context (about 8 s). */
-  contextS: 4,
+  contextS: 2,
   /** Time constants (s) of the slope following its target: tipping into a descent is quicker than turning uphill. */
-  descentTauS: 0.35,
+  descentTauS: 0.2,
   climbTauS: 0.8,
   /** Ramp-in (s) after the entry portal. */
   rampInS: 1.5,
@@ -329,25 +335,91 @@ function buildPace(timeline: Timeline, withNether: boolean): PaceTables {
   return { n, rate, speed, dist, fov, slope, drop, distanceAt, timeAt, v0 };
 }
 
+/** The Nether rails of a track: deck layers (absolute) of every row of every visit, the level tail past each exit included. */
+export interface NetherRails {
+  visits: { first: number; layers: Int32Array; t0: number; t1: number }[];
+  /** Deck layer of the rails at row bd, or null where there are none. */
+  layerAt(bd: number): number | null;
+  /** Deck layer of visit k at row bd, clamped to its first and last rows (for the portal rows at the very ends of a visit). */
+  layerNear(k: number, bd: number): number;
+}
+
+const railsCache = new WeakMap<Timeline, NetherRails>();
+
+/**
+ * The Nether rails (rails.ts): the smooth grade of every visit (the drop table at the middle of each row) quantized into
+ * deck layers in runs of 45 degree ramps, then `NETHER.exitTail` level rows past the exit portal (never into the next
+ * visit). A pure function of the timeline, memoized; the camera (`heightAt`), the bridge and the portals (logic.ts) and
+ * the light posts (netherPosts.ts) all read it, so they agree to the block.
+ */
+export function netherRails(timeline: Timeline): NetherRails {
+  const hit = railsCache.get(timeline);
+  if (hit) return hit;
+  const { rate, drop, distanceAt, timeAt } = paceTables(timeline, true);
+  const intervals = scheduleOf(timeline).intervals;
+  const visits = intervals.map((iv, k) => {
+    const d0 = distanceAt(iv.t0), d1 = distanceAt(iv.t1), next = intervals[k + 1];
+    // Rows whose middle the camera passes inside the visit, then the tail.
+    const first = Math.ceil(d0 - 0.5), inside = Math.max(1, Math.ceil(d1 - 0.5) - first);
+    const end = Math.min(d1 + NETHER.exitTail, next ? distanceAt(next.t0) : Infinity);
+    const tail = Math.max(0, Math.ceil(end - 0.5) - (first + inside));
+    const target = new Float64Array(inside);
+    for (let i = 0; i < inside; i++) target[i] = sample(drop, timeAt(first + i + 0.5) * rate);
+    const q = quantizeRails(target);
+    const layers = new Int32Array(inside + tail);
+    for (let i = 0; i < layers.length; i++) layers[i] = ROAD.layer + q[Math.min(i, inside - 1)]!;
+    return { first, layers, t0: iv.t0, t1: iv.t1 };
+  });
+  const rails: NetherRails = {
+    visits,
+    layerAt: (bd) => {
+      for (const v of visits) if (bd >= v.first && bd < v.first + v.layers.length) return v.layers[bd - v.first]!;
+      return null;
+    },
+    layerNear: (k, bd) => {
+      const v = visits[k]!;
+      return v.layers[Math.min(v.layers.length - 1, Math.max(0, bd - v.first))]!;
+    },
+  };
+  railsCache.set(timeline, rails);
+  return rails;
+}
+
+const pathRails = new WeakMap<TrackPath, NetherRails>();
+
+/** The Nether rails a Voxel path rides (null for a path built without a world, which has no Nether). */
+export function netherRailsOf(path: TrackPath): NetherRails | null {
+  return pathRails.get(path) ?? null;
+}
+
+/** Camera height (m) lost in the Nether: seated in the minecart instead of walking the road. */
+const SEATED_DROP = ROAD.eyeAbove - RAILS.eyeAbove;
+
 export function createVoxelPath(timeline: Timeline, worldSeed?: Seed): TrackPath {
   const salts = worldSeed ? voxelTerrain(timeline, worldSeed) : null;
   const { n, rate, fov, slope, drop, distanceAt, timeAt, v0 } = paceTables(timeline, salts !== null);
-  const intervals = salts ? scheduleOf(timeline).intervals : [];
-  return {
+  const rails = salts ? netherRails(timeline) : null;
+  const visits = rails?.visits ?? [];
+  const visitAt = (t: number) => visits.findIndex((v) => t >= v.t0 && t < v.t1);
+  const path: TrackPath = {
     distanceAt,
     timeAt,
-    // The road is flat except over bridges, where it rises and falls with the arch, and in the Nether, where it
-    // descends (the same profiles the segments build). Leaving the Nether jumps back to the road: the portal flash hides it.
+    // The road is flat except over bridges, where it rises and falls with the arch. In the Nether the camera rides the
+    // smooth grade (a wave that follows the music), seated lower; the rail blocks follow it within a band (rails.ts) and the
+    // minecart under the camera tilts with them. Leaving the Nether jumps back to the road: the portal flash hides it.
     heightAt: (t: number) => {
       if (!salts) return 0;
-      if (intervals.some((v) => t >= v.t0 && t < v.t1)) return sample(drop, t * rate);
+      if (visitAt(t) >= 0) return sample(drop, t * rate) - SEATED_DROP;
       return bridgeOffsetAt(salts, distanceAt(t));
     },
+    // The smooth grade the rails follow (the view itself stays level, ROAD.cameraTilt); the speed graph shows it.
     slopeAt: (t: number) => {
       if (!salts) return 0;
-      if (intervals.some((v) => t >= v.t0 && t < v.t1)) return sample(slope, t * rate);
+      if (visitAt(t) >= 0) return sample(slope, t * rate);
       return bridgeSlopeAt(salts, distanceAt(t));
     },
     fovAt: (t: number) => (n > 0 ? sample(fov, t * rate) : fovForSpeed(v0)),
   };
+  if (rails) pathRails.set(path, rails);
+  return path;
 }

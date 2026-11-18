@@ -305,6 +305,11 @@ export interface PostFrame {
   cloudGlow: number;
   exposure: number;
   flash: number;
+  /**
+   * Optional: drawn into the HDR scene over the world after its depth is cleared, with its own camera (the minecart, whose
+   * close near plane the world's depth range cannot afford). Nothing in the world can hide it.
+   */
+  overlay?: { scene: THREE.Scene; camera: THREE.Camera };
 }
 
 function target(type: THREE.TextureDataType, options: THREE.RenderTargetOptions = {}): THREE.WebGLRenderTarget {
@@ -437,6 +442,13 @@ export class VoxelPost {
     const previous = renderer.getRenderTarget();
     renderer.setRenderTarget(this.sceneTarget);
     renderer.render(scene, camera);
+    if (frame.overlay) {
+      const autoClear = renderer.autoClear;
+      renderer.autoClear = false;
+      renderer.clearDepth();
+      renderer.render(frame.overlay.scene, frame.overlay.camera);
+      renderer.autoClear = autoClear;
+    }
 
     const cu = this.cloudMaterial.uniforms;
     cu.uProjInv!.value.copy(camera.projectionMatrixInverse);
