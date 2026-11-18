@@ -187,7 +187,9 @@ export const voxelLogic: ScenarioLogic<VoxelParams, VoxelSegment> = {
   // 31: a bridge arch never reaches into a cave section (it used to be cut short at the mouth, dropping the deck and the
   // camera 2-3 blocks in one row) and rises at most one block per row; the camera no longer pitches with the road (the
   // block game's level view), so the Nether posts, placed by when they leave the screen, move with it.
-  version: 31,
+  // 32: smaller glowstone clusters under the low Nether overhangs near the bridge (NETHER.lowGlow), so no stretch of a
+  // visit is left without glowstone in view where the rock hides the high roofs.
+  version: 32,
   // `speed` is only the fallback for code without a path (tests); the real pace comes from createPath (see path.ts).
   // The detailed segments: 8 ahead (512 m = 32 chunks), 2 behind, 384 blocks (24 chunks) to each side (TERRAIN.halfWidth).
   // Beyond them the far field (far.ts) carries the terrain to the end of the fog; the far plane covers its corners.

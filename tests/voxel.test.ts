@@ -1149,3 +1149,48 @@ test('voxel camera: the view stays level on steps, bridges and Nether ramps, and
   assert.equal(voxelLogic.config.pathTilt, 0);
   assert.equal(POSTS.pathTilt, voxelLogic.config.pathTilt);
 });
+
+test('voxel Nether: glowstone is in view all along a visit, also where low rock hides the high roofs', () => {
+  // A visibility probe: from the eye every 8 rows, the exposed glowstone faces ahead within 56 m (the Nether fog ends at about 61 m) and inside a wide view
+  // are ray-marched through the volume (opaque blocks stop the ray). Every stop must see some glowstone.
+  const tl = pulsingTrack(20, 80, 110);
+  const EYE = ROAD.eyeAbove + 0.6, REACH = 56, STEP = 8, MIN_VISIBLE = 4;
+  const clear = new Set<number>([B.air, B.netherGlowstone, B.rail, B.poweredRail, B.netherFence, B.lavaFall]);
+  for (const key of ['a', 'b', 'c']) {
+    const seed = seedOf(key), p = createVoxelPath(tl, seed), t = voxelTerrain(tl, seed);
+    const iv = scheduleOf(tl).intervals[0]!;
+    const offsetAt = (bd: number): number | null => { const tt = p.timeAt(bd + 0.5); return tt >= iv.t0 && tt < iv.t1 ? p.heightAt(tt) : null; };
+    const d0 = Math.ceil(p.distanceAt(iv.t0)) + 10, d1 = Math.floor(p.distanceAt(iv.t1)) - REACH - 10;
+    const len = d1 - d0 + REACH + 2;
+    const { data, sx, sy, sz, ox, oy } = buildNetherVolume(t, d0, len, offsetAt, [], 0)!;
+    const layer = sx * sz, rowOf = (bd: number) => d0 + len - bd;
+    const get = (bx: number, y: number, bd: number) => {
+      const x = bx - ox, yy = y - oy, z = rowOf(bd);
+      return x < 0 || x >= sx || yy < 0 || yy >= sy || z < 0 || z >= sz ? B.netherrack : data[x + sx * (z + sz * yy)]!;
+    };
+    // Exposed glowstone (an air neighbour), grouped by row.
+    const byRow = new Map<number, [number, number][]>();
+    for (let z = 1; z < sz - 1; z++) for (let y = 1; y < sy - 1; y++) for (let x = 1; x < sx - 1; x++) {
+      const i = x + sx * (z + sz * y);
+      if (data[i] !== B.netherGlowstone || ![i - 1, i + 1, i - sx, i + sx, i - layer].some((j) => data[j] === B.air)) continue;
+      const bd = d0 + len - z;
+      if (!byRow.has(bd)) byRow.set(bd, []);
+      byRow.get(bd)!.push([x + ox, y + oy]);
+    }
+    let worst = Infinity;
+    for (let cam = d0; cam < d1; cam += STEP) {
+      const ey = deckLayer(offsetAt(cam)!) + EYE;
+      let seen = 0;
+      for (let bd = cam + 2; bd < cam + REACH && seen < MIN_VISIBLE; bd++) for (const [bx, y] of byRow.get(bd) ?? []) {
+        const vx = bx + 0.5, vy = y + 0.5 - ey, dz = bd + 0.5 - cam, dist = Math.hypot(vx, vy, dz);
+        if (dist > REACH || Math.abs(vx) > dz * 1.4 + 2) continue;
+        const n = Math.ceil(dist * 2);
+        let open = true;
+        for (let k = 1; k < n - 2 && open; k++) open = clear.has(get(Math.floor(vx * k / n), Math.floor(ey + vy * k / n), Math.floor(cam + dz * k / n)));
+        if (open && ++seen >= MIN_VISIBLE) break;
+      }
+      worst = Math.min(worst, seen);
+    }
+    assert.ok(worst >= MIN_VISIBLE, `world ${key}: some stop of the visit sees only ${worst} glowstone blocks`);
+  }
+});

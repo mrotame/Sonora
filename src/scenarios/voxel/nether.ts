@@ -44,6 +44,14 @@ export const NETHER = {
   glowCell: 12,
   glowKeep: 0.95,
   /**
+   * Smaller glowstone clusters under the low overhangs near the bridge (2026-11-18, user-reported: some stretches showed
+   * no glowstone). Where the roof comes down close to the corridor the rock hides the high clusters, so these hang from
+   * any roof found within `maxScan` blocks above a start 1..12 blocks over the deck, `minX`..`maxX` blocks to the side,
+   * in cells of `cell` blocks kept with chance `keep`; radius radius[0] + up to radius[1], depth radius x `depth`.
+   * PROPOSED values (measured with a visibility probe: no stretch of a visit without glowstone in view, about +18% blocks).
+   */
+  lowGlow: { cell: 10, keep: 0.9, fromRy: 1, spanRy: 12, maxScan: 22, minX: 5, maxX: 50, radius: [1.5, 1.5], depth: 1.4 },
+  /**
    * Rows (blocks) the Nether keeps going past the exit portal, level at the rail height of the exit, so the view through
    * and around the portal shows the cavern up to the haze instead of ending at the frame. Longer than the Nether fog end
    * (scene.ts: FOG_RANGE end x NETHER_FOG_SCALE, 61 m by default, 72 m at the widest detailed volume) with a margin.
@@ -244,40 +252,49 @@ export function buildNetherVolume(t: TerrainSalts, coreStart: number, coreLength
     }
   }
 
-  // Glowstone clusters hanging from roofs: one anchor per NETHER.glowCell cell (jittered, so clusters never overlap), under the
-  // ceiling found by scanning up from a random height. Each is an irregular ellipsoid that only holds where the layer
-  // above it holds (a hanging growth, not floating blocks).
-  const CELL = NETHER.glowCell;
-  const cx0 = Math.floor(ox / CELL) - 1, cx1 = Math.floor((ox + sx) / CELL) + 1;
-  const cd0 = Math.floor(bdLo / CELL) - 1, cd1 = Math.floor(bdHi / CELL) + 1;
-  const jitter = CELL - 8; // anchors stay 4 blocks inside their cell, so two clusters are never closer than 8 blocks
-  for (let gx = cx0; gx <= cx1; gx++) for (let gd = cd0; gd <= cd1; gd++) {
-    if (hash01(salt + 30, gx, gd) > NETHER.glowKeep) continue;
-    const ax = gx * CELL + 4 + Math.floor(hash01(salt + 31, gx, gd) * jitter), ad = gd * CELL + 4 + Math.floor(hash01(salt + 32, gx, gd) * jitter);
-    const x = ax - ox, z = rowOf(ad);
-    if (x < 1 || x >= sx - 1 || z < 1 || z >= sz - 1) continue;
-    const dl = dlOf(z);
-    if (dl === null) continue;
-    let y = dl + 16 + Math.floor(hash01(salt + 33, gx, gd) * 46) - oy;
-    if (y >= sy - 2 || data[idx(x, y, z)] !== B.air) continue;
-    while (y < sy - 2 && data[idx(x, y, z)] === B.air) y++;
-    if (!rockLike(data[idx(x, y, z)]!)) continue;
-    const topY = y - 1; // first air layer under the roof
-    const R = 2 + hash01(salt + 34, gx, gd) * 2.6, depth = R * (1 + 0.8 * hash01(salt + 35, gx, gd));
-    if (Math.abs(ax) < 9 && topY + oy - dl - depth - 1 < NETHER.corridor + 3) continue; // never down into the clear corridor
-    for (let dy = 0; dy <= depth + 1; dy++) {
-      for (let dz = -Math.ceil(R); dz <= Math.ceil(R); dz++) for (let dx = -Math.ceil(R); dx <= Math.ceil(R); dx++) {
-        const px = x + dx, pz = z + dz, py = topY - dy;
-        if (px < 1 || px >= sx - 1 || pz < 1 || pz >= sz - 1 || py < 1) continue;
-        const q = (dx * dx + dz * dz) / (R * R * (1 - 0.5 * dy / (depth + 1))) + (dy * dy) / (depth * depth);
-        if (q > 0.9 + 0.5 * (hash01(salt + 36, ax + dx, py, ad + dz) - 0.5)) continue;
-        const pi = idx(px, py, pz);
-        if (data[pi] !== B.air) continue;
-        const above = data[pi + layer]!;
-        if (above === B.netherGlowstone || rockLike(above)) data[pi] = B.netherGlowstone; // pulses on the bass
+  // Glowstone clusters hanging from roofs: one anchor per cell of a grid (jittered, so clusters of a grid never overlap),
+  // under the ceiling found by scanning up from a random height. Each is an irregular ellipsoid that only holds where the
+  // layer above it holds (a hanging growth, not floating blocks). Two grids: the high roofs (NETHER.glowCell) and the low
+  // overhangs near the bridge (NETHER.lowGlow), which fill the stretches where rock hides the high roofs from the camera.
+  interface GlowGrid { cell: number; keep: number; salt: number; inset: number; minRy: number; spanRy: number; maxScan: number; minX: number; maxX: number; radius: readonly [number, number]; depth: readonly [number, number] }
+  const hangClusters = (g: GlowGrid) => {
+    const CELL = g.cell, jitter = CELL - 2 * g.inset;
+    const cx0 = Math.floor(ox / CELL) - 1, cx1 = Math.floor((ox + sx) / CELL) + 1;
+    const cd0 = Math.floor(bdLo / CELL) - 1, cd1 = Math.floor(bdHi / CELL) + 1;
+    for (let gx = cx0; gx <= cx1; gx++) for (let gd = cd0; gd <= cd1; gd++) {
+      if (hash01(g.salt, gx, gd) > g.keep) continue;
+      const ax = gx * CELL + g.inset + Math.floor(hash01(g.salt + 1, gx, gd) * jitter), ad = gd * CELL + g.inset + Math.floor(hash01(g.salt + 2, gx, gd) * jitter);
+      if (Math.abs(ax) < g.minX || Math.abs(ax) > g.maxX) continue;
+      const x = ax - ox, z = rowOf(ad);
+      if (x < 1 || x >= sx - 1 || z < 1 || z >= sz - 1) continue;
+      const dl = dlOf(z);
+      if (dl === null) continue;
+      let y = dl + g.minRy + Math.floor(hash01(g.salt + 3, gx, gd) * g.spanRy) - oy;
+      if (y < 1 || y >= sy - 2 || data[idx(x, y, z)] !== B.air) continue;
+      let scanned = 0;
+      while (y < sy - 2 && scanned < g.maxScan && data[idx(x, y, z)] === B.air) { y++; scanned++; }
+      if (!rockLike(data[idx(x, y, z)]!)) continue;
+      const topY = y - 1; // first air layer under the roof
+      const R = g.radius[0] + hash01(g.salt + 4, gx, gd) * g.radius[1], depth = R * (g.depth[0] + g.depth[1] * hash01(g.salt + 5, gx, gd));
+      if (Math.abs(ax) < 9 && topY + oy - dl - depth - 1 < NETHER.corridor + 3) continue; // never down into the clear corridor
+      for (let dy = 0; dy <= depth + 1; dy++) {
+        for (let dz = -Math.ceil(R); dz <= Math.ceil(R); dz++) for (let dx = -Math.ceil(R); dx <= Math.ceil(R); dx++) {
+          const px = x + dx, pz = z + dz, py = topY - dy;
+          if (px < 1 || px >= sx - 1 || pz < 1 || pz >= sz - 1 || py < 1) continue;
+          const q = (dx * dx + dz * dz) / (R * R * (1 - 0.5 * dy / (depth + 1))) + (dy * dy) / (depth * depth);
+          if (q > 0.9 + 0.5 * (hash01(g.salt + 6, ax + dx, py, ad + dz) - 0.5)) continue;
+          const pi = idx(px, py, pz);
+          if (data[pi] !== B.air) continue;
+          const above = data[pi + layer]!;
+          if (above === B.netherGlowstone || rockLike(above)) data[pi] = B.netherGlowstone; // pulses on the bass
+        }
       }
     }
-  }
+  };
+  // The high grid keeps the salts and shape of the clusters before version 32 (the same worlds, the same clusters).
+  hangClusters({ cell: NETHER.glowCell, keep: NETHER.glowKeep, salt: salt + 30, inset: 4, minRy: 16, spanRy: 46, maxScan: Infinity, minX: 0, maxX: Infinity, radius: [2, 2.6], depth: [1, 0.8] });
+  const low = NETHER.lowGlow;
+  hangClusters({ cell: low.cell, keep: low.keep, salt: salt + 40, inset: 2, minRy: low.fromRy, spanRy: low.spanRy, maxScan: low.maxScan, minX: low.minX, maxX: low.maxX, radius: low.radius, depth: [low.depth, 0] });
 
   // The bridge: nether-brick deck, fences, rails, pillars; a clear corridor above it.
   for (let bd = startRow - 1; bd <= startRow + length; bd++) {
