@@ -6,6 +6,7 @@ import { decodeAudioFile, DecodeError } from './audio/processing/decode';
 import { Timeline } from './audio/intelligence/timeline';
 import { Experience } from './experience/controller/experience';
 import { scenarios } from './scenarios/registry';
+import { HomeScreen } from './home/HomeScreen';
 import { createWorldSeed } from './world/identity/seed';
 import { WorldWorker } from './world/generation/workerClient';
 
@@ -70,6 +71,7 @@ export function App() {
   const [scenarioId, setScenarioId] = useState(scenarios[0]!.logic.id);
   const [phase, setPhase] = useState<Phase>('input');
   const [stage, setStage] = useState('queued');
+  const [analysisFraction, setAnalysisFraction] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -118,6 +120,7 @@ export function App() {
 
     setError(null);
     setStage('queued');
+    setAnalysisFraction(0);
     setPhase('preparing');
     try {
       const file = await acquireAudio(url, setStage, abort.signal);
@@ -137,7 +140,7 @@ export function App() {
         sampleRate: audio.sampleRate,
         left: audio.channels[0],
         right: audio.channels[1] === audio.channels[0] ? null : audio.channels[1],
-        onProgress: () => undefined,
+        onProgress: setAnalysisFraction,
       });
 
       setStage('building');
@@ -182,31 +185,24 @@ export function App() {
       {/* End-of-track fade to black, driven by the Experience controller (covers the scene and the speed graph). */}
       <div ref={fadeRef} aria-hidden="true" style={{ position: 'fixed', inset: 0, background: '#000', opacity: 0, pointerEvents: 'none' }} />
       {overlay && (
-        <main style={{ position: 'fixed', inset: 0, display: 'grid', placeItems: 'center', background: phase === 'preparing' ? 'rgba(8,2,20,0.85)' : '#0a0418', color: '#f4e9ff', fontFamily: 'system-ui, sans-serif', padding: '1rem' }}>
-          <div style={{ width: 'min(560px, 100%)' }}>
-            <h1 style={{ marginTop: 0 }}>Sonora</h1>
-            {(phase === 'input' || phase === 'failed' || phase === 'ended') && (
-              <form onSubmit={(ev) => void start(ev)}>
-                {phase === 'ended' && <p role="status">A música terminou. Cole outro link para uma nova viagem.</p>}
-                {phase === 'failed' && <p role="alert">{error}</p>}
-                <label>
-                  Link de um vídeo do YouTube
-                  <input type="url" value={url} onChange={(ev) => setUrl(ev.target.value)} placeholder="https://www.youtube.com/watch?v=..." required style={{ display: 'block', width: '100%', padding: '0.6rem', boxSizing: 'border-box', margin: '0.3rem 0 0.8rem' }} />
-                </label>
-                <label>
-                  Cenário
-                  <select value={scenarioId} onChange={(ev) => setScenarioId(ev.target.value)} style={{ display: 'block', width: '100%', padding: '0.6rem', margin: '0.3rem 0 1rem' }}>
-                    {scenarios.map((s) => (
-                      <option key={s.logic.id} value={s.logic.id}>{s.label}</option>
-                    ))}
-                  </select>
-                </label>
-                <button type="submit" style={{ padding: '0.6rem 1.4rem' }}>Iniciar</button>
-              </form>
-            )}
-            {phase === 'preparing' && <p role="status">{STAGE_LABEL[stage] ?? stage}…</p>}
-          </div>
-        </main>
+        <HomeScreen
+          url={url}
+          onUrlChange={setUrl}
+          scenarioId={scenarioId}
+          onScenarioChange={setScenarioId}
+          onSubmit={(ev) => void start(ev)}
+          preparing={phase === 'preparing'}
+          statusText={STAGE_LABEL[stage] ?? stage}
+          stage={stage}
+          analysisFraction={analysisFraction}
+          message={
+            phase === 'ended'
+              ? { kind: 'status', text: 'A música terminou. Cole outro link para uma nova viagem.' }
+              : phase === 'failed' && error
+                ? { kind: 'alert', text: error }
+                : null
+          }
+        />
       )}
       <label style={{ position: 'fixed', left: 12, bottom: 12, zIndex: 10, display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: 'rgba(8,2,20,0.55)', border: '1px solid rgba(255,255,255,0.25)', borderRadius: 6, color: '#f4e9ff', fontFamily: 'system-ui, sans-serif', fontSize: 12 }}>
         Volume

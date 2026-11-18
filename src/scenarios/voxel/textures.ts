@@ -36,6 +36,15 @@ import poppyUrl from './textures/poppy.png';
 import sugarCaneUrl from './textures/sugar_cane.png';
 import railUrl from './textures/rail.png';
 import poweredRailUrl from './textures/powered_rail.png';
+import snowUrl from './textures/snow.png';
+import andesiteUrl from './textures/andesite.png';
+import tuffUrl from './textures/tuff.png';
+import coarseDirtUrl from './textures/coarse_dirt.png';
+import spruceLogUrl from './textures/spruce_log.png';
+import spruceLogTopUrl from './textures/spruce_log_top.png';
+import spruceLeavesUrl from './textures/spruce_leaves.png';
+import fernUrl from './textures/fern.png';
+import redstoneLampOnUrl from './textures/redstone_lamp_on.png';
 import sunUrl from './textures/sun.png';
 import moonUrl from './textures/moon.png';
 import magmaUrl from './textures/magma.png';
@@ -58,7 +67,8 @@ const URLS: Record<LayerName, string> = {
   birchLeaves: birchLeavesUrl, glowstone: glowstoneUrl, obsidian: obsidianUrl, cryingObsidian: cryingObsidianUrl,
   amethyst: amethystUrl, purpur: purpurUrl, netherrack: netherrackUrl, netherBricks: netherBricksUrl, soulSand: soulSandUrl,
   quartzOre: quartzOreUrl, shortGrass: shortGrassUrl, dandelion: dandelionUrl, poppy: poppyUrl, sugarCane: sugarCaneUrl,
-  rail: railUrl, poweredRail: poweredRailUrl, sun: sunUrl, moon: moonUrl, magma: magmaUrl, lava: lavaUrl, water: waterUrl,
+  rail: railUrl, poweredRail: poweredRailUrl, snow: snowUrl, andesite: andesiteUrl, tuff: tuffUrl, coarseDirt: coarseDirtUrl,
+  spruceLog: spruceLogUrl, spruceLogTop: spruceLogTopUrl, spruceLeaves: spruceLeavesUrl, fern: fernUrl, redstoneLampOn: redstoneLampOnUrl, sun: sunUrl, moon: moonUrl, magma: magmaUrl, lava: lavaUrl, water: waterUrl,
   portal: portalUrl,
 };
 
@@ -71,6 +81,7 @@ export const ATLAS_GLSL = /* glsl */ `
   const vec3 GRASS_TINT = vec3(0.569, 0.741, 0.349);
   const vec3 FOLIAGE_TINT = vec3(0.467, 0.671, 0.184);
   const vec3 BIRCH_TINT = vec3(0.502, 0.655, 0.333);
+  const vec3 SPRUCE_TINT = vec3(0.380, 0.600, 0.380);
 
   // uv in tiles (unwrapped); the gradients come from the unwrapped uv so tile borders do not break mip selection.
   vec4 atlas(vec2 uv, float layer, vec2 dx, vec2 dy) {

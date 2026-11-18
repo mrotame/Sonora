@@ -1,19 +1,33 @@
-// Voxel Dreamscape: when the camera is in the Nether and what time it is in the overworld (pure, no Three.js, no DOM).
-// The slow intensity of the music (with hysteresis) opens a Nether interval at each intense passage and closes it when
-// the music calms down. Time of day starts at dawn; every exit from the Nether leaves the world at a later hour, and the
-// last exit is at night. Everything is a pure function of the timeline, memoized per timeline.
+// Voxel Dreamscape: which section the camera is in and what time it is in the overworld (pure, no Three.js, no DOM).
+// The music's section intensity (about 3 s of smoothing, centered so it adds no lag) is read at three levels, each with
+// hysteresis: calm passages ride the open road, medium ones go through a cave section inside a mountain, and intense
+// ones take the camera through a portal into the Nether, which always opens inside a cave (open -> caves -> Nether ->
+// caves -> open). Time of day starts at dawn; every exit from the Nether leaves the world at a later hour, and the last
+// exit is at night. Everything is a pure function of the timeline, memoized per timeline.
 import type { Timeline } from '../../audio/intelligence/timeline.ts';
 import { intensityCurves } from './path.ts';
 
 export const SCHEDULE = {
-  /** Slow intensity above which the camera enters the Nether, and below which it leaves. */
-  enter: 0.7,
-  exit: 0.45,
+  /**
+   * Levels on the section scale (0 calmest .. 1 most intense part of the music, path.ts SECTION_SCALE), user-requested:
+   * below 50% open road, 50..69% caves, 70..100% Nether. A small hysteresis around each boundary.
+   */
+  caveEnter: 0.52,
+  caveExit: 0.48,
+  enter: 0.72,
+  exit: 0.68,
+  /** Minimum time (s) of a cave section and of the open road between two of them (shorter gaps are merged). */
+  minCaveS: 5,
+  minOpenS: 5,
+  /** Cave time (s) at least before every Nether entry and after every Nether exit. */
+  caveLeadS: 3,
   /** Minimum time (s) in the Nether, in the overworld between two visits, and before the first entry. */
-  minNetherS: 8,
-  minOverworldS: 10,
+  minNetherS: 6,
+  minOverworldS: 8,
   firstEntryS: 6,
-  /** The Nether is closed this long (s) before the music ends: the epilogue is always in the overworld. */
+  /** No cave starts before this time (s). */
+  firstCaveS: 3,
+  /** Caves and the Nether are closed this long (s) before the music ends: the epilogue is always on the open road. */
   endMarginS: 2,
   /** Hours: dawn at the start, the first and last exit hours (the last is at night). */
   startHour: 6.5,
@@ -33,9 +47,37 @@ export interface Interval {
   exitHour: number;
 }
 
+export interface Span {
+  t0: number;
+  t1: number;
+}
+
 export interface Schedule {
+  /** Nether visits. */
   intervals: Interval[];
+  /** Cave sections (track times of the mouth and of the exit); every Nether visit lies inside one, with a lead. */
+  caves: Span[];
   musicEndS: number;
+}
+
+/** Spans where the curve is above `enter` until it drops below `exit` (each at least `minS` long, starting at `fromS`). */
+function hysteresis(curve: Float64Array, rate: number, enter: number, exit: number, minS: number, fromS: number, gapS: number, untilS: number): [number, number][] {
+  const out: [number, number][] = [];
+  let inside = false, start = 0, lastExit = -1e9;
+  for (let i = 0; i < curve.length; i++) {
+    const t = i / rate, x = curve[i]!;
+    if (t >= untilS) break;
+    if (!inside && x > enter && t >= fromS && t - lastExit >= gapS) {
+      inside = true;
+      start = t;
+    } else if (inside && x < exit && t - start >= minS) {
+      out.push([start, t]);
+      inside = false;
+      lastExit = t;
+    }
+  }
+  if (inside) out.push([start, untilS]);
+  return out;
 }
 
 const cache = new WeakMap<Timeline, Schedule>();
@@ -44,33 +86,36 @@ export function scheduleOf(timeline: Timeline): Schedule {
   const hit = cache.get(timeline);
   if (hit) return hit;
   const { rate } = timeline.data;
-  const curve = intensityCurves(timeline).islands;
+  const curve = intensityCurves(timeline).section;
   const musicEndS = timeline.musicEndS;
-  const raw: [number, number][] = [];
-  let inside = false, start = 0, lastExit = -1e9;
-  for (let i = 0; i < curve.length; i++) {
-    const t = i / rate, x = curve[i]!;
-    if (t >= musicEndS) break;
-    if (!inside && x > SCHEDULE.enter && t >= SCHEDULE.firstEntryS && t - lastExit >= SCHEDULE.minOverworldS) {
-      inside = true;
-      start = t;
-    } else if (inside && x < SCHEDULE.exit && t - start >= SCHEDULE.minNetherS) {
-      raw.push([start, t]);
-      inside = false;
-      lastExit = t;
-    }
+  const S = SCHEDULE;
+  const caveClose = musicEndS - S.endMarginS;
+  const netherClose = caveClose - S.caveLeadS;
+
+  // The Nether: the intense passages. The last one may have been cut short by the forced exit; drop it when it is too
+  // brief to be worth a visit.
+  const nether = hysteresis(curve, rate, S.enter, S.exit, S.minNetherS, S.firstEntryS, S.minOverworldS, netherClose)
+    .filter(([a, b]) => b - a >= S.minNetherS * 0.5);
+
+  // Caves: the medium passages, widened so that every Nether visit has its cave lead on both sides.
+  const spans = hysteresis(curve, rate, S.caveEnter, S.caveExit, 0, S.firstCaveS, 0, caveClose);
+  for (const [a, b] of nether) spans.push([Math.max(S.firstCaveS, a - S.caveLeadS), Math.min(caveClose, b + S.caveLeadS)]);
+  spans.sort((p, q) => p[0] - q[0]);
+  const merged: [number, number][] = [];
+  for (const [a, b] of spans) {
+    const last = merged[merged.length - 1];
+    if (last && a - last[1] < S.minOpenS) last[1] = Math.max(last[1], b);
+    else merged.push([a, b]);
   }
-  const closeAt = musicEndS - SCHEDULE.endMarginS;
-  if (inside) raw.push([start, closeAt]);
-  // The last interval may have been cut short by the forced exit; drop it when it is too brief to be worth a visit.
-  const kept = raw.filter(([a, b]) => b - a >= SCHEDULE.minNetherS * 0.5 && b <= closeAt + 1e-6);
-  const n = kept.length;
-  const intervals = kept.map(([t0, t1], k): Interval => ({
+  const caves = merged.filter(([a, b]) => b - a >= S.minCaveS || nether.some(([c, d]) => c >= a && d <= b)).map(([t0, t1]) => ({ t0, t1 }));
+
+  const n = nether.length;
+  const intervals = nether.map(([t0, t1], k): Interval => ({
     t0,
     t1,
-    exitHour: n === 1 ? SCHEDULE.lastExitHour : SCHEDULE.firstExitHour + ((SCHEDULE.lastExitHour - SCHEDULE.firstExitHour) * k) / (n - 1),
+    exitHour: n === 1 ? S.lastExitHour : S.firstExitHour + ((S.lastExitHour - S.firstExitHour) * k) / (n - 1),
   }));
-  const schedule = { intervals, musicEndS };
+  const schedule = { intervals, caves, musicEndS };
   cache.set(timeline, schedule);
   return schedule;
 }
@@ -78,6 +123,12 @@ export function scheduleOf(timeline: Timeline): Schedule {
 /** Interval containing track time t, or null in the overworld. */
 export function netherAt(s: Schedule, t: number): Interval | null {
   for (const iv of s.intervals) if (t >= iv.t0 && t < iv.t1) return iv;
+  return null;
+}
+
+/** Cave section containing track time t, or null on the open road (a Nether visit is inside a cave section). */
+export function caveAt(s: Schedule, t: number): Span | null {
+  for (const c of s.caves) if (t >= c.t0 && t < c.t1) return c;
   return null;
 }
 

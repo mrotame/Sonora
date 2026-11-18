@@ -6,29 +6,29 @@
 //     follows that target with a short time constant so it never jumps.
 //   - The field of view widens with the speed (sense of velocity).
 //   - After the music ends the speed eases down to `endKmh` for the controller's epilogue (PRODUCT_SPEC 2.4).
-// The same intensity, smoothed over a longer window, is the baked driver of the floating archipelagos
-// (`islandIntensityAt`). Everything is a pure function of the timeline, evaluated by track time.
-// Same speed scale as Synthwave Dimension (cruise 280 km/h, 100..600 km/h), as requested by the user.
-import type { Timeline } from '../../audio/intelligence/timeline.ts';
+// Everything is a pure function of the timeline, evaluated by track time.
+// Voxel Dreamscape's own scale, as requested by the user: 40 km/h in calm moments up to 100 km/h in fast ones.
+import { SILENCE_LEVEL, type Timeline } from '../../audio/intelligence/timeline.ts';
 import type { Seed } from '../../world/identity/seed.ts';
 import type { TrackPath } from '../types.ts';
 import { bridgeOffsetAt, bridgeSlopeAt } from './road.ts';
+import { caveMask } from './caveMask.ts';
 import { scheduleOf } from './schedule.ts';
-import { saltsFor } from './terrain.ts';
+import { saltsFor, withCaves, type TerrainSalts } from './terrain.ts';
 
 export const PACE = {
   /** Speed range and cruise speed in km/h (1 world unit = 1 m). */
-  minKmh: 100,
-  maxKmh: 600,
-  cruiseKmh: 280,
+  minKmh: 40,
+  maxKmh: 100,
+  cruiseKmh: 63,
   /** ln(speed) gained from the song's median (0) to its most intense moment; the same amount is lost toward its calmest. */
-  intensityGain: 1.3,
+  intensityGain: 1.6,
   /** Time constant (s) of the speed following its target. */
   followTauS: 1.2,
   /** Half-width (s) of each of two centered box passes for the moment-to-moment intensity (about 1.5 s). */
   detailS: 0.75,
-  /** Half-width (s) of each of two centered box passes for the archipelago driver (about 6 s). */
-  islandS: 3,
+  /** Half-width (s) of each of two centered box passes for the section level (about 3 s): open land, caves or Nether. */
+  sectionS: 1.5,
   /** Half-width (s) of each of two centered box passes for the horizon mood (about 20 s). */
   moodS: 10,
   /** Intensity proxy: log loudness (energy in dB over `loudnessFloorDb`) and spectral flux. */
@@ -36,30 +36,47 @@ export const PACE = {
   fluxWeight: 0.5,
   loudnessFloorDb: -30,
   /** Speed once the music has ended (trailing silence and epilogue), reached over `endSlowS` seconds. */
-  endKmh: 50,
+  endKmh: 25,
   endSlowS: 2.5,
-  /** Vertical field of view (degrees) at the minimum and maximum speed, interpolated in log speed. */
-  fovDeg: [60, 84],
+  /** Vertical field of view (degrees) at the minimum and maximum speed, interpolated in log speed (40% wider than 60..84). */
+  fovDeg: [84, 117.6],
+  /** In the Nether the field of view widens by this factor more (capped at `fovMaxDeg`), eased in and out over `netherFovS` s after each portal. */
+  netherFov: 1.12,
+  fovMaxDeg: 130,
+  netherFovS: 1.2,
 } as const;
 
 const KMH_TO_UNITS_PER_S = 1 / 3.6;
 
 /**
- * Nether leg (Synthwave-like descent, implemented here so scenarios stay independent): the minecart drops along the
- * rails, steeper and faster the more intense the music is; a calm moment levels out or even climbs a little.
+ * Nether leg: the rails roll like a roller coaster with the music (the idea of Synthwave's road, implemented here so
+ * scenarios stay independent, and measured inside the visit itself since the whole Nether is already an intense passage).
+ * A moment more intense than the visit's median (or than the last few seconds) drops the minecart, the more the steeper,
+ * and it picks up speed; a calmer one levels out and climbs a little, and the cart slows. Descents are steeper and
+ * quicker than climbs, so each visit still goes down as a whole, into the depths.
  */
 export const NETHER_PATH = {
-  /** Road slope (rise over run) at the calmest and at the most intense moment (negative = descending). */
-  calmSlope: 0.06,
-  steepSlope: -0.55,
-  /** Intensity range mapped to the slope. */
-  steepFrom: 0.15,
-  steepTo: 0.85,
-  /** Time constant (s) of the slope following its target, and the ramp-in after the entry portal. */
-  followTauS: 0.7,
+  /** Steepest slopes (rise over run): descents (negative) are steeper than climbs. */
+  maxDescent: -0.6,
+  maxClimb: 0.28,
+  /** Slope per unit of intensity difference; a climb needs about twice the difference of a descent for the same slope. */
+  slopeGain: 2.2,
+  climbScale: 0.5,
+  /** Intensity quantile of the visit that rides level (below 0.5: more descent than climb). */
+  pivotQuantile: 0.4,
+  /** Weight of "intense for this visit" (against the pivot) vs. "more intense than the last seconds" (contrast). */
+  absoluteWeight: 1,
+  contrastWeight: 0.8,
+  /** Half-width (s) of each of two centered box passes for the surrounding context (about 8 s). */
+  contextS: 4,
+  /** Time constants (s) of the slope following its target: tipping into a descent is quicker than turning uphill. */
+  descentTauS: 0.35,
+  climbTauS: 0.8,
+  /** Ramp-in (s) after the entry portal. */
   rampInS: 1.5,
-  /** ln(speed) gained at the steepest descent. */
-  speedGain: 0.5,
+  /** ln(speed) gained at the steepest descent and lost at the steepest climb. */
+  descentSpeedGain: 0.45,
+  climbSpeedBrake: 0.5,
 } as const;
 
 /** Running mean over [i - r, i + r], clamped at the ends (prefix sums, O(n)). Centered, so it adds no lag. */
@@ -109,11 +126,28 @@ function normalize(curve: Float64Array): Float64Array {
   return curve;
 }
 
+/**
+ * Section scale (user-requested, 2026-11-17): 0 is the calmest part of the music and 1 its most intense, measured only
+ * over the frames where music plays (a near-silent intro or outro would otherwise squeeze every musical passage into the
+ * upper half of the scale). Robust percentiles instead of the bare minimum and maximum.
+ */
+export const SECTION_SCALE = { lowQ: 0.1, highQ: 0.98 } as const;
+
+
+function normalizeMusic(curve: Float64Array, energy: ArrayLike<number>): Float64Array {
+  const music = Float64Array.from(curve.filter((_, i) => energy[i]! > SILENCE_LEVEL));
+  if (music.length < 2) return normalize(curve);
+  const lo = quantile(music, SECTION_SCALE.lowQ), hi = quantile(music, SECTION_SCALE.highQ);
+  if (hi - lo < 1e-9) return curve.fill(0.5);
+  for (let i = 0; i < curve.length; i++) curve[i] = Math.min(1, Math.max(0, (curve[i]! - lo) / (hi - lo)));
+  return curve;
+}
+
 interface IntensityCurves {
   /** Moment-to-moment intensity (pace). */
   detail: Float64Array;
-  /** Slower intensity (archipelagos). */
-  islands: Float64Array;
+  /** Section intensity: which level the music is at (open land, caves, Nether; see schedule.ts). */
+  section: Float64Array;
   /** Slowest intensity (horizon mood). */
   mood: Float64Array;
 }
@@ -134,16 +168,11 @@ export function intensityCurves(timeline: Timeline): IntensityCurves {
   }
   const curves = {
     detail: normalize(blur2(raw, PACE.detailS, rate)),
-    islands: normalize(blur2(raw, PACE.islandS, rate)),
+    section: normalizeMusic(blur2(raw, PACE.sectionS, rate), tracks.energy),
     mood: normalize(blur2(raw, PACE.moodS, rate)),
   };
   cache.set(timeline, curves);
   return curves;
-}
-
-/** Slow intensity (0 calmest .. 1 most intense) at track time t: the baked driver of the archipelagos. */
-export function islandIntensityAt(timeline: Timeline, t: number): number {
-  return sample(intensityCurves(timeline).islands, t * timeline.data.rate);
 }
 
 /** Slowest intensity (0..1, about 20 s) at track time t: the horizon's mood. */
@@ -158,8 +187,62 @@ export function fovForSpeed(v: number): number {
   return PACE.fovDeg[0] + (PACE.fovDeg[1] - PACE.fovDeg[0]) * u;
 }
 
-export function createVoxelPath(timeline: Timeline, worldSeed?: Seed): TrackPath {
-  const salts = worldSeed ? saltsFor(worldSeed) : null;
+/**
+ * 0 in the overworld, 1 in the Nether, eased over `netherFovS` after each entry and after each exit (the portal flash
+ * covers the start of both). Pure function of the intervals and the time.
+ */
+export function netherFovWeight(intervals: readonly { t0: number; t1: number }[], t: number): number {
+  let w = 0;
+  for (const iv of intervals) w = Math.max(w, smoothstep(iv.t0, iv.t0 + PACE.netherFovS, t) * (1 - smoothstep(iv.t1, iv.t1 + PACE.netherFovS, t)));
+  return w;
+}
+
+interface PaceTables {
+  n: number;
+  rate: number;
+  speed: Float64Array;
+  dist: Float64Array;
+  fov: Float64Array;
+  slope: Float64Array;
+  drop: Float64Array;
+  distanceAt: (t: number) => number;
+  timeAt: (d: number) => number;
+  v0: number;
+}
+
+// The pace depends only on the music (and on whether the Nether is scheduled), never on the terrain, so the cave
+// sections can be placed along the road from it. Memoized per timeline: a pure function of the immutable timeline.
+const paceCache = new WeakMap<Timeline, Map<boolean, PaceTables>>();
+
+function paceTables(timeline: Timeline, withNether: boolean): PaceTables {
+  let perTimeline = paceCache.get(timeline);
+  if (!perTimeline) paceCache.set(timeline, (perTimeline = new Map()));
+  const hit = perTimeline.get(withNether);
+  if (hit) return hit;
+  const tables = buildPace(timeline, withNether);
+  perTimeline.set(withNether, tables);
+  return tables;
+}
+
+const terrainCache = new WeakMap<Timeline, WeakMap<Seed, TerrainSalts>>();
+
+/**
+ * Terrain of a world for a track: the world's salts with the cave sections of the schedule mapped to road rows (the
+ * centre of the map has mountains only there). Memoized per timeline and seed object.
+ */
+export function voxelTerrain(timeline: Timeline, worldSeed: Seed): TerrainSalts {
+  let perTimeline = terrainCache.get(timeline);
+  if (!perTimeline) terrainCache.set(timeline, (perTimeline = new WeakMap()));
+  const hit = perTimeline.get(worldSeed);
+  if (hit) return hit;
+  const pace = paceTables(timeline, true);
+  const ranges = scheduleOf(timeline).caves.map((c) => [Math.floor(pace.distanceAt(c.t0)), Math.floor(pace.distanceAt(c.t1))] as const);
+  const terrain = withCaves(saltsFor(worldSeed), caveMask(ranges));
+  perTimeline.set(worldSeed, terrain);
+  return terrain;
+}
+
+function buildPace(timeline: Timeline, withNether: boolean): PaceTables {
   const { rate } = timeline.data;
   const intensity = intensityCurves(timeline).detail;
   const frames = intensity.length;
@@ -173,8 +256,15 @@ export function createVoxelPath(timeline: Timeline, worldSeed?: Seed): TrackPath
   const lnEnd = Math.log(PACE.endKmh * KMH_TO_UNITS_PER_S);
   const k = 1 - Math.exp(-1 / (PACE.followTauS * rate));
 
-  const intervals = salts ? scheduleOf(timeline).intervals : [];
-  const kSlope = 1 - Math.exp(-1 / (NETHER_PATH.followTauS * rate));
+  const intervals = withNether ? scheduleOf(timeline).intervals : [];
+  const kDown = 1 - Math.exp(-1 / (NETHER_PATH.descentTauS * rate));
+  const kUp = 1 - Math.exp(-1 / (NETHER_PATH.climbTauS * rate));
+  const context = blur2(intensity, NETHER_PATH.contextS, rate);
+  // Level intensity of each visit: its own quantile, so a visit that is intense throughout still has its ups and downs.
+  const pivots = intervals.map((v) => {
+    const lo = Math.max(0, Math.floor(v.t0 * rate)), hi = Math.min(frames - 1, Math.ceil(v.t1 * rate));
+    return hi > lo ? quantile(intensity.subarray(lo, hi + 1), NETHER_PATH.pivotQuantile) : pivot;
+  });
   const speed = new Float64Array(n);
   const dist = new Float64Array(n);
   const fov = new Float64Array(n);
@@ -186,21 +276,31 @@ export function createVoxelPath(timeline: Timeline, worldSeed?: Seed): TrackPath
     const t = i / rate;
     const x = intensity[Math.min(i, frames - 1)]!;
     let lnMusic = Math.min(Math.log(vMax), Math.max(Math.log(vMin), lnCruise + PACE.intensityGain * (x - pivot)));
-    const iv = intervals.find((v) => t >= v.t0 && t < v.t1);
+    const ivIndex = intervals.findIndex((v) => t >= v.t0 && t < v.t1);
+    const iv = intervals[ivIndex];
     if (iv) {
-      const steep = smoothstep(NETHER_PATH.steepFrom, NETHER_PATH.steepTo, x);
-      const target = (NETHER_PATH.calmSlope + (NETHER_PATH.steepSlope - NETHER_PATH.calmSlope) * steep) * smoothstep(iv.t0, iv.t0 + NETHER_PATH.rampInS, t);
+      // Positive drive = more intense than expected = downhill.
+      const drive = NETHER_PATH.absoluteWeight * (x - pivots[ivIndex]!) + NETHER_PATH.contrastWeight * (x - context[Math.min(i, frames - 1)]!);
+      const scaled = NETHER_PATH.slopeGain * drive * (drive > 0 ? 1 : NETHER_PATH.climbScale);
+      const target = Math.max(NETHER_PATH.maxDescent, Math.min(NETHER_PATH.maxClimb, -scaled)) * smoothstep(iv.t0, iv.t0 + NETHER_PATH.rampInS, t);
       const continuing = i > 0 && t - 1 / rate >= iv.t0; // not the first sample of the leg
       const before = continuing ? slope[i - 1]! : 0;
-      slope[i] = before + (target - before) * kSlope;
+      slope[i] = before + (target - before) * (target < before ? kDown : kUp);
       drop[i] = continuing ? drop[i - 1]! + (slope[i - 1]! * speed[i - 1]!) / rate : 0;
-      lnMusic = Math.min(Math.log(vMax), lnMusic + NETHER_PATH.speedGain * Math.max(0, -slope[i]!) / -NETHER_PATH.steepSlope);
+      // Fast on the steep descents, slower on the climbs; the ceiling is the same top speed as everywhere.
+      const lnNether = lnMusic + (slope[i]! < 0 ? NETHER_PATH.descentSpeedGain * (slope[i]! / NETHER_PATH.maxDescent) : -NETHER_PATH.climbSpeedBrake * (slope[i]! / NETHER_PATH.maxClimb));
+      lnMusic = Math.min(Math.log(vMax), Math.max(Math.log(vMin), lnNether));
+    } else if (i > 0) {
+      // Outside a leg the tables hold their last value, so a time just before the exit portal interpolates between two
+      // samples of the leg and never toward 0 (that put the exit portal far above the Nether bridge, out of sight).
+      slope[i] = slope[i - 1]!;
+      drop[i] = drop[i - 1]!;
     }
     lnV = i === 0 ? lnMusic : lnV + (lnMusic - lnV) * k;
     // The epilogue blend comes after the smoothing, so the end speed is reached exactly `endSlowS` after the music.
     const ending = smoothstep(tMusicEnd, tMusicEnd + PACE.endSlowS, t);
     speed[i] = Math.exp(lnV + (lnEnd - lnV) * ending);
-    fov[i] = fovForSpeed(speed[i]!);
+    fov[i] = Math.min(PACE.fovMaxDeg, fovForSpeed(speed[i]!) * (1 + (PACE.netherFov - 1) * netherFovWeight(intervals, t)));
     if (i + 1 < n) dist[i + 1] = dist[i]! + speed[i]! / rate;
   }
 
@@ -226,7 +326,13 @@ export function createVoxelPath(timeline: Timeline, worldSeed?: Seed): TrackPath
     const span = dist[hi]! - dist[lo]!;
     return (lo + (span > 0 ? (d - dist[lo]!) / span : 0)) / rate;
   };
+  return { n, rate, speed, dist, fov, slope, drop, distanceAt, timeAt, v0 };
+}
 
+export function createVoxelPath(timeline: Timeline, worldSeed?: Seed): TrackPath {
+  const salts = worldSeed ? voxelTerrain(timeline, worldSeed) : null;
+  const { n, rate, fov, slope, drop, distanceAt, timeAt, v0 } = paceTables(timeline, salts !== null);
+  const intervals = salts ? scheduleOf(timeline).intervals : [];
   return {
     distanceAt,
     timeAt,

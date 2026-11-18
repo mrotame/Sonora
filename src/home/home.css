@@ -1,0 +1,196 @@
+/* Initial / loading screen (approved prototype). Everything is scoped under .home. */
+.home {
+  --home-fg: #f4e9ff;
+  --home-accent: #c9a2ff;
+  --home-veil: 0.42;
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  overflow: hidden;
+  color: var(--home-fg);
+  background: #0a0418;
+  font-family: system-ui, sans-serif;
+}
+.home, .home *, .home *::before, .home *::after { box-sizing: border-box; }
+
+/* Screenshot of the selected scenario, behind the purple veil. */
+.home-bg { position: absolute; inset: -20px; filter: blur(2px); transform: scale(1.04); transition: opacity 0.5s; }
+.home-bg.is-hidden { opacity: 0; }
+.home-bg > i { position: absolute; inset: 0; background-size: cover; background-position: center; }
+/* Two backdrops (Voxel: Overworld | Nether) are split by a diagonal. */
+.home-bg.is-split > i:first-child { clip-path: polygon(0 0, 56% 0, 44% 100%, 0 100%); }
+.home-bg.is-split > i:last-child { clip-path: polygon(56% 0, 100% 0, 100% 100%, 44% 100%); }
+.home-veil {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 60% 70% at 50% 50%, rgba(10, 4, 24, 0.5), rgba(10, 4, 24, 0) 100%),
+    rgba(24, 8, 52, var(--home-veil));
+}
+
+.home-brand {
+  position: absolute;
+  top: 22px;
+  left: 28px;
+  z-index: 2;
+  margin: 0;
+  font-size: 1.7rem;
+  text-shadow: 0 0 14px rgba(201, 162, 255, 0.6);
+}
+
+/* One neon card around the whole form, darker inside; 16:9 on desktop. */
+.home-panel {
+  position: relative;
+  width: min(720px, 100%);
+  aspect-ratio: 16 / 9;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 1.5rem 2rem;
+  border-radius: 18px;
+  background: rgba(8, 2, 20, 0.78);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--home-accent);
+  box-shadow:
+    0 0 0 1px rgba(201, 162, 255, 0.35),
+    0 0 18px rgba(201, 162, 255, 0.45),
+    0 0 60px rgba(168, 85, 247, 0.28),
+    inset 0 0 28px rgba(168, 85, 247, 0.12);
+}
+.home-message { margin: 0 0 0.4rem; font-size: 0.9rem; }
+
+/* Loading: step label, neon progress bar and percentage. */
+.home-loading { margin: auto 0; width: 100%; text-align: center; }
+.home-loading-label { margin: 0 0 1.2rem; font-size: 1.05rem; }
+.home-bar {
+  height: 14px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(201, 162, 255, 0.12);
+  border: 1px solid rgba(201, 162, 255, 0.35);
+}
+.home-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #7c3aed, #c026d3 55%, #ec4899);
+  box-shadow: 0 0 14px rgba(192, 38, 211, 0.7);
+  transition: width 0.3s ease-out;
+}
+.home-loading-percent { margin: 0.9rem 0 0; font-size: 1.6rem; font-weight: 700; letter-spacing: 0.05em; text-shadow: 0 0 12px rgba(201, 162, 255, 0.6); font-variant-numeric: tabular-nums; }
+
+.home-form { flex: 1; display: flex; flex-direction: column; justify-content: space-between; }
+.home-field { display: block; margin-top: 1.1rem; }
+.home-input {
+  display: block;
+  width: 100%;
+  margin: 0.4rem 0 0;
+  padding: 0.65rem 0.8rem;
+  color: var(--home-fg);
+  background: rgba(201, 162, 255, 0.08);
+  border: 1px solid rgba(201, 162, 255, 0.35);
+  border-radius: 8px;
+  font: inherit;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.home-input::placeholder { color: rgba(244, 233, 255, 0.45); }
+.home-input:focus { border-color: var(--home-accent); box-shadow: 0 0 12px rgba(201, 162, 255, 0.4); }
+
+.home-group-title { margin: 0 0 0.6rem; }
+.home-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; margin: 0; padding: 0; border: 0; }
+
+/* Tiles are radio inputs (arrow keys work); no box of their own, selection = brighter icon + glow + underline. */
+.home-tile {
+  all: unset;
+  position: relative;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 1rem 0.6rem 1.4rem;
+  border-radius: 12px;
+  background: rgba(201, 162, 255, 0.05);
+  text-align: center;
+  opacity: 0.6;
+  transition: opacity 0.15s, background 0.15s, transform 0.15s;
+}
+.home-tile input { position: absolute; opacity: 0; pointer-events: none; }
+.home-tile:hover { opacity: 0.9; transform: translateY(-2px); }
+.home-tile:has(input:focus-visible) { outline: 2px solid var(--home-accent); outline-offset: 2px; }
+.home-tile.is-selected { opacity: 1; background: rgba(201, 162, 255, 0.14); }
+.home-tile.is-selected::after {
+  content: '';
+  position: absolute;
+  left: 32%;
+  right: 32%;
+  bottom: 9px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--home-accent);
+  box-shadow: 0 0 8px var(--home-accent);
+}
+.home-tile svg {
+  width: 42px;
+  height: 42px;
+  stroke: var(--home-accent);
+  fill: none;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: filter 0.15s;
+}
+.home-tile.is-selected svg { filter: drop-shadow(0 0 6px rgba(201, 162, 255, 0.9)); }
+.home-tile span { padding-bottom: 0.1rem; font-size: 0.78rem; line-height: 1.2; }
+
+/* Themed button: neon purple -> magenta. */
+.home-go {
+  width: 100%;
+  padding: 0.95rem 1.4rem;
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #fff;
+  background: linear-gradient(90deg, #7c3aed, #c026d3 55%, #ec4899);
+  box-shadow: 0 0 18px rgba(192, 38, 211, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  text-shadow: 0 0 8px rgba(255, 255, 255, 0.5);
+  transition: transform 0.15s, box-shadow 0.15s, filter 0.15s;
+}
+.home-go:hover { transform: translateY(-1px); filter: brightness(1.12); box-shadow: 0 0 28px rgba(236, 72, 153, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.4); }
+.home-go:active { transform: translateY(0); }
+.home-go:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+
+/* Phone, portrait: the panel grows with its content; scenarios stack one per row (room for many). */
+@media (max-width: 640px) and (orientation: portrait) {
+  .home { padding-top: 3.4rem; }
+  .home-panel { aspect-ratio: auto; max-height: 100%; overflow-y: auto; justify-content: flex-start; padding: 1.4rem 1.2rem; }
+  .home-form { flex: none; gap: 1.6rem; justify-content: flex-start; }
+  .home-field { margin-top: 0; }
+  .home-tiles { grid-template-columns: 1fr; gap: 10px; }
+  .home-tile { flex-direction: row; justify-content: flex-start; gap: 0.9rem; padding: 0.7rem 1rem; text-align: left; }
+  .home-tile svg { width: 34px; height: 34px; flex: none; }
+  .home-tile span { padding: 0; font-size: 0.85rem; }
+  .home-tile.is-selected::after { left: auto; right: 14px; top: 50%; bottom: auto; width: 8px; height: 8px; border-radius: 50%; transform: translateY(-50%); }
+  .home-brand { top: 16px; left: 18px; font-size: 1.45rem; }
+}
+
+/* Phone, landscape (short screens): scenarios side by side, wrapping onto new rows; the panel scrolls if needed. */
+@media (max-height: 520px) and (orientation: landscape) {
+  .home { padding: 2.6rem 1rem 0.8rem; }
+  .home-panel { aspect-ratio: auto; max-height: 100%; overflow-y: auto; justify-content: flex-start; padding: 1rem 1.4rem; }
+  .home-form { flex: none; gap: 1rem; justify-content: flex-start; }
+  .home-field { margin-top: 0; }
+  .home-tiles { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+  .home-tile { padding: 0.6rem 0.5rem 1rem; gap: 0.25rem; }
+  .home-tile svg { width: 30px; height: 30px; }
+  .home-tile.is-selected::after { bottom: 6px; }
+  .home-go { padding: 0.7rem 1.4rem; }
+  .home-brand { top: 10px; left: 16px; font-size: 1.3rem; }
+}

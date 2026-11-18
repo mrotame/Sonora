@@ -18,6 +18,11 @@ export interface ScenarioScene {
   removeFarSegment?(index: number): void;
   /** `trackTime` (s) is the playback clock, for time-addressable shader animation that is not driven by features. */
   update(params: unknown, cameraPosition: THREE.Vector3, trackTime: number): void;
+  /**
+   * Optional: draws the frame itself (e.g. through its own post-processing) to the renderer's current target, the
+   * canvas. Absent = the controller calls `renderer.render(scene, camera)`.
+   */
+  render?(renderer: THREE.WebGLRenderer, camera: THREE.PerspectiveCamera): void;
   dispose(): void;
 }
 
@@ -39,6 +44,11 @@ export interface ScenarioConfig {
   eyeHeight: number;
   /** Camera far plane in world units (default 1500). Must cover the scenario's farthest visible content. */
   viewDistance?: number;
+  /**
+   * Share of the path's slope angle the camera pitch follows (only with a path; default 0.8). 0 keeps the view level
+   * while the camera rides the road up and down.
+   */
+  pathTilt?: number;
   /** Show the speed/height graph HUD when the scenario has a path (default true). */
   speedGraph?: boolean;
 }

@@ -33,8 +33,8 @@ export interface ExperienceOptions {
 const MAX_PIXEL_RATIO = 2;
 /** Vertical field of view (degrees) when the scenario path does not set one. */
 const DEFAULT_FOV = 70;
-/** Fraction of the road slope angle the camera pitch follows (only for scenarios with a path). */
-const PATH_TILT = 0.8;
+/** Fraction of the road slope angle the camera pitch follows (only for scenarios with a path), unless the scenario sets `pathTilt`. */
+const DEFAULT_PATH_TILT = 0.8;
 /** 0.5 (not 0.1) keeps depth precision usable when a scenario's view distance reaches kilometres. */
 const NEAR_PLANE = 0.5;
 /** Seconds the camera keeps moving after the music ends (at the path's slow end speed) while the screen fades to black. */
@@ -140,7 +140,13 @@ export class Experience {
   async prepare(): Promise<void> {
     this.updateCamera(0, 0);
     await Promise.all([this.manager.update(0), this.farManager?.update(0), this.sceneImpl.ready?.()]);
-    this.renderer.render(this.sceneImpl.scene, this.camera); // compiles shaders before audio starts
+    this.draw(); // compiles shaders before audio starts
+  }
+
+  /** One frame: the scenario draws it itself when it has its own pipeline (post-processing), else a plain render. */
+  private draw(): void {
+    if (this.sceneImpl.render) this.sceneImpl.render(this.renderer, this.camera);
+    else this.renderer.render(this.sceneImpl.scene, this.camera);
   }
 
   /** Starts audio and the render loop. The AudioContext must already be running (created in the user gesture). */
@@ -183,7 +189,7 @@ export class Experience {
 
     this.opts.timeline.evaluate(t, this.features);
     this.sceneImpl.update(interpret(this.features, this.interpretSeed), this.camera.position, t);
-    this.renderer.render(this.sceneImpl.scene, this.camera);
+    this.draw();
     this.speedGraph?.draw(t);
     if (this.opts.fadeOverlay) this.opts.fadeOverlay.style.opacity = String(fadeOut(t, this.musicEndS));
 
@@ -203,11 +209,12 @@ export class Experience {
   };
 
   private updateCamera(distance: number, t: number): void {
-    const { eyeHeight } = this.opts.definition.logic.config;
+    const { eyeHeight, pathTilt = DEFAULT_PATH_TILT } = this.opts.definition.logic.config;
     const rise = this.path ? this.path.heightAt(t) : 0; // the road elevation under the camera at this time
     this.camera.position.set(0, eyeHeight + rise, -distance); // straight path toward -z
-    // The camera tilts with the road (uphill looks up, a drop looks down) so steep slopes stay in view; look is added on top.
-    const tilt = this.path ? Math.atan(this.path.slopeAt(t)) * PATH_TILT : 0;
+    // The camera tilts with the road (uphill looks up, a drop looks down) so steep slopes stay in view, by the scenario's
+    // share (`pathTilt`; 0 keeps the view level); look is added on top.
+    const tilt = this.path && pathTilt !== 0 ? Math.atan(this.path.slopeAt(t)) * pathTilt : 0;
     this.camera.rotation.set(this.look.pitch + tilt, -this.look.yaw, 0);
     // Optional music-driven field of view (pure function of track time).
     const fov = this.path?.fovAt?.(t) ?? DEFAULT_FOV;

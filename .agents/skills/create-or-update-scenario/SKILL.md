@@ -1061,6 +1061,8 @@ Executar as verificações possíveis:
 - Cada grupo visual reage ao seu driver (sem depender de outro grupo).
 - A assinatura é determinística e time-addressable (mesmo `t`, mesmo resultado).
 
+- Os padrões de bugs conhecidos (seção 13) não se repetem.
+
 Não afirmar que uma validação foi executada se ela não foi realmente realizada.
 
 ## Etapa 11 — Documentar
@@ -1474,3 +1476,95 @@ não faz sentido para ele, e a dispensa deve ser explicada na entrega.
   outro cenário.
 - Se o Synthwave for modificado, esta seção deve ser atualizada para continuar
   descrevendo o código real. Não alterar o Synthwave ao criar outro cenário.
+
+---
+
+# 13. Bugs conhecidos e lições aprendidas
+
+Registro de bugs reais encontrados nos cenários: sintoma, causa e correção. Antes
+de criar ou atualizar um cenário, verificar se ele repete algum destes padrões.
+Ao corrigir um novo bug que possa se repetir em outro cenário, registrá-lo aqui
+no mesmo formato.
+
+## 13.1 Flags inteiros em varying interpolado (Voxel Dreamscape)
+
+**Sintoma.** Glowstone, véu do portal e obsidiana chorona piscavam várias vezes
+por segundo entre aceso e escuro (e às vezes com um tom verde), em manchas que
+mudavam conforme a câmera andava. Magma, lava e água tinham o mesmo risco.
+Blocos com flags `0` (obsidiana comum, pedra) não eram afetados.
+
+**Causa.** O mesher empacota face, AO, luz e **flags de material** num único
+float por vértice (`packed`, `mesher.ts`). O vertex shader extrai os flags e os
+envia ao fragment shader num `varying` comum (`vInfo.w`). Mesmo com o mesmo
+valor nos quatro vértices, a interpolação com correção de perspectiva em float32
+não é exata: `8.0` chega como `7.9999995` em alguns pixels. O fragment shader
+decodificava com `floor(flags / bit)` sem margem, então:
+
+- `floor(7.9999995 / 8) = 0`: perdia o bit `emissive` (o bloco escurecia);
+- `mod(7.9999995, 4) ≈ 3.99`: virava tint 3 (birch, verde).
+
+Só os valores que caem exatamente na fronteira de um bit testado são afetados
+(glowstone `8`, portal `56`, chorona `32`, magma/lava `24`, água `16`); zero é
+interpolado sem erro. O piscar no tempo vem de o erro depender da posição de
+cada pixel no triângulo, que muda a cada frame com a câmera.
+
+**Correção.** Arredondar antes de decodificar: `floor(v + 0.5)`
+(`materialFlags` em `FLAGS_GLSL`, `blocks.ts`), usado em todo ponto do shader
+que lê `vInfo.w`. Alternativa mais estrita: varying `flat` (WebGL2), que exige
+separar os campos discretos dos interpolados (AO e luz precisam continuar
+interpolados). Testes em `tests/voxel.test.ts`: simulação da interpolação em
+float32 para todos os blocos, que confirma que o `floor` direto falha e que
+`materialFlags` recupera todos os bits e o tint; e verificação dos flags
+emissivos no mesh de glowstone e portal.
+
+**Regra para qualquer cenário.**
+
+- Nunca aplicar `floor`, `mod` ou comparação exata a um `varying` interpolado
+  que representa um valor discreto (id, flag, layer, face). Arredondar com
+  `floor(v + 0.5)` ou usar `flat`.
+- Testes de limiar sobre valores interpolados devem ter folga de pelo menos 0.5
+  (por exemplo `tint > 2.5`), nunca cair exatamente num inteiro.
+- Manter a decodificação dos bits em um único lugar compartilhado entre o GLSL e
+  uma versão TypeScript equivalente, para que os testes cubram a mesma regra que
+  o shader.
+- Sintoma típico: piscar ou "ruído" que só aparece em alguns materiais e muda com
+  o movimento da câmera, sem relação com a música.
+
+## 13.2 Feature crua em superfície grande e padrão procedural subpixel (Voxel Dreamscape)
+
+**Sintoma.** A camada de nuvens piscava no céu. As nuvens são um plano único
+(2400 m) com células de 12 m recortadas por ruído no fragment shader.
+
+**Causas (duas, somadas).**
+
+1. **Driver sem suavização.** `cloudGlow = 0.3 + 0.7 * mid` ia direto ao
+   uniform. A feature `mid` é amostrada a 100 Hz sem suavização, então o brilho
+   da nuvem mudava a cada frame. Medido com uma faixa real a 60 fps: variação
+   média de 1,1% por frame, e 87% das janelas de 0,25 s com oscilação acima de
+   4%. Numa área clara e grande como as nuvens, isso aparece como cintilação.
+2. **Serrilhado do padrão procedural.** As bordas das células vêm do `discard`
+   por ruído, não de arestas de triângulo, então o MSAA não as suaviza. Ao longe
+   e em ângulo rasante, uma célula ocupa poucos pixels e o padrão "ferve" quando
+   a câmera se move.
+
+**Correção.**
+
+1. Suavizar o driver no `scene.ts` com média exponencial pelo tempo da faixa
+   (`CLOUD_SMOOTH_S = 0.6`, o mesmo padrão já usado para `energy`, com
+   `ENERGY_SMOOTH_S = 0.25`). Com 0,6 s, nenhuma janela de 0,25 s passa de 4%.
+2. Medir `fwidth` das coordenadas de célula (antes de qualquer `discard`, para
+   as derivadas serem válidas) e esmaecer as nuvens quando a célula fica menor
+   que alguns pixels.
+
+**Regra para qualquer cenário.**
+
+- Features cruas (`energy`, `bass`, `mid`, `high`, `flux`) variam a cada frame.
+  Elas só podem ir direto a um uniform quando o efeito é pequeno ou
+  intencionalmente percussivo (faíscas, flashes de onset). Brilho de superfícies
+  grandes deve ser suavizado (cerca de 0,25 a 1 s).
+- Padrões procedurais com bordas duras no fragment shader (`floor`/`step` +
+  `discard`) precisam de anti-aliasing próprio: esmaecer ou filtrar por
+  `fwidth` quando o detalhe fica subpixel.
+- Ao diagnosticar um piscar, separar as causas: com a música pausada e a câmera
+  andando, o que pisca é serrilhado; com a câmera parada e a música tocando, é o
+  driver.

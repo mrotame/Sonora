@@ -1,13 +1,14 @@
 // Voxel Dreamscape: block volume to triangle meshes (pure, no Three.js, no DOM). Runs in the Worker.
 // - Greedy meshing: coplanar faces of the same texture, tint, light and ambient occlusion merge into one quad.
-// - Per-vertex ambient occlusion (the classic "smooth lighting" corner rule) and an approximate sky light per face
-//   (open sky = full, covered cells fall off with the distance to open sky, so tunnels and island undersides are dark).
+// - Smooth lighting as in a block game: sky and block light (0..15, flood filled by light.ts) averaged per
+//   vertex over the 4 cells in front of the corner, plus per-vertex ambient occlusion.
 // - Three meshes: `solid` (opaque cubes, plus lava), `water` (translucent top surface) and `cross` (plants, fences,
 //   rails and panes: small non-cube shapes, drawn double sided).
 // Coordinates are scene coordinates: x across, y up, z = -d (the camera travels toward -z). Volume index of cell
 // (x, y, z) is `x + sx * (z + sz * y)`; world block position = origin + index. The outermost cells are padding: they are
 // read (face culling, occlusion) but never meshed.
-import { B, BLOCKS, FLAG, OPAQUE, Shape } from './blocks.ts';
+import { B, BLOCKS, FLAG, isLava, OPAQUE, Shape } from './blocks.ts';
+import { computeLight } from './light.ts';
 
 export interface Volume {
   data: Uint8Array;
@@ -18,15 +19,21 @@ export interface Volume {
   ox: number;
   oy: number;
   oz: number;
+  /** Rows (z) on each side kept only for the light of the neighbours: read, never meshed. Default 0. */
+  margin?: number;
 }
 
 /** Floats per vertex: x, y, z, layer, u, v, packed (see PACK_*). */
 export const VERTEX_STRIDE = 7;
-/** packed = face + 8 * ao + 32 * light + 256 * flags; face: 0 +x, 1 -x, 2 +y, 3 -y, 4 +z, 5 -z; ao 0 (dark) .. 3; light 0..7. */
-export const PACK = { ao: 8, light: 32, flags: 256 } as const;
-export const LIGHT_MAX = 7;
+/**
+ * packed = face + 8 * ao + 32 * sky + 2048 * block + 131072 * flags; face: 0 +x, 1 -x, 2 +y, 3 -y, 4 +z, 5 -z;
+ * ao 0 (dark) .. 3; sky and block: sum of the 4 light levels around the corner (0..60, the shader divides by 4).
+ */
+export const PACK = { ao: 8, sky: 32, block: 2048, flags: 131072 } as const;
 /** Drop of the water surface below the top of its block (m). */
 export const WATER_DROP = 0.11;
+/** Height of a flat rail over the floor of its cell (the block game's 1/16). */
+export const RAIL_LIFT = 0.0625;
 
 export interface MeshArrays {
   vertices: Float32Array;
@@ -81,56 +88,34 @@ const PLANE = [[2, 1], [0, 2], [0, 1]] as const;
 const SIGMA = [-1, -1, 1] as const;
 const CORNERS = [[0, 0], [1, 0], [1, 1], [0, 1]] as const;
 
-export function meshVolume(vol: Volume, extra: readonly [number, number, number] | null = null): VolumeMeshes {
+/**
+ * `extra`: per-vertex constants of a floating island. `skyLit`: false for a dimension without sky (the Nether), where
+ * only block light reaches.
+ */
+export function meshVolume(vol: Volume, extra: readonly [number, number, number] | null = null, skyLit = true): VolumeMeshes {
   const { data, sx, sy, sz } = vol;
   const dims = [sx, sy, sz] as const;
   const origin = [vol.ox, vol.oy, vol.oz] as const;
   const stride = [1, sx * sz, sx] as const;
   const solid = new Builder(extra), water = new Builder(extra), cross = new Builder(extra);
-
-  // Highest opaque cell of every column: the sky light reaches everything above it.
-  const top = new Int16Array(sx * sz).fill(-1);
-  for (let y = sy - 1; y >= 0; y--) {
-    const row = y * sx * sz;
-    for (let c = 0; c < sx * sz; c++) if (top[c]! < 0 && OPAQUE[data[row + c]!]) top[c] = y;
-  }
-  const lightCache = new Map<number, number>();
-  const lightAt = (x: number, y: number, z: number): number => {
-    // Floating pieces hang in open air: the sky reaches every side (only the ambient occlusion shades them).
-    if (extra) return LIGHT_MAX - 1;
-    if (y > top[x + z * sx]!) return LIGHT_MAX;
-    const key = (x + z * sx) * 128 + Math.min(127, Math.max(0, y));
-    const hit = lightCache.get(key);
-    if (hit !== undefined) return hit;
-    let best = 0;
-    for (let dz = -3; dz <= 3; dz++) {
-      const zz = z + dz;
-      if (zz < 0 || zz >= sz) continue;
-      for (let dx = -3; dx <= 3; dx++) {
-        const xx = x + dx;
-        if (xx < 0 || xx >= sx) continue;
-        if (y > top[xx + zz * sx]!) best = Math.max(best, LIGHT_MAX - 2 * Math.max(Math.abs(dx), Math.abs(dz)));
-      }
-    }
-    const out = Math.max(0, best);
-    lightCache.set(key, out);
-    return out;
-  };
+  const margin = vol.margin ?? 0;
+  const light = computeLight(vol, skyLit);
   const solidAt = (idx: number) => (OPAQUE[data[idx]!] ? 1 : 0);
-
-  // Block light: glowstone lights the cells within 3 blocks (level 3 next to it), not blocked by walls (cheap and
-  // good enough for lamps and ceilings). Stored in 2 bits per face (flags bits 64 and 128).
-  const blockLight = new Uint8Array(data.length);
-  for (let i = data.indexOf(B.glowstone); i >= 0; i = data.indexOf(B.glowstone, i + 1)) {
-    const gx = i % sx, gz = Math.floor(i / sx) % sz, gy = Math.floor(i / (sx * sz));
-    for (let dy = -3; dy <= 3; dy++) for (let dz = -3; dz <= 3; dz++) for (let dx = -3; dx <= 3; dx++) {
-      const x = gx + dx, y = gy + dy, z = gz + dz;
-      if (x < 0 || x >= sx || y < 0 || y >= sy || z < 0 || z >= sz) continue;
-      const lvl = 4 - Math.ceil(Math.sqrt(dx * dx + dy * dy + dz * dz));
-      const j = x + sx * (z + sz * y);
-      if (lvl > blockLight[j]!) blockLight[j] = lvl;
-    }
-  }
+  /**
+   * Smooth light of one face corner (a block game's rule): the average of the cell in front of the face and its 3
+   * neighbours around that corner, leaving out opaque ones (they hold no light); if both sides are opaque the diagonal
+   * is hidden too. Returns 4 x the level (0..60) of each channel: sky + 64 * block.
+   */
+  const cornerLight = (front: number, side1: number, side2: number, diag: number): number => {
+    let skySum = light.sky[front]!, blockSum = light.block[front]!, count = 1;
+    const add = (i: number) => { skySum += light.sky[i]!; blockSum += light.block[i]!; count++; };
+    const o1 = OPAQUE[data[side1]!], o2 = OPAQUE[data[side2]!];
+    if (!o1) add(side1);
+    if (!o2) add(side2);
+    if (!(o1 && o2) && !OPAQUE[data[diag]!]) add(diag);
+    const q = (sum: number) => Math.round((sum * 4) / count);
+    return q(skySum) + 64 * q(blockSum);
+  };
 
   // Vertical band that can show faces: below it every cell is solid, above it every cell is air.
   let yLo = sy, yHi = -1;
@@ -150,23 +135,24 @@ export function meshVolume(vol: Volume, extra: readonly [number, number, number]
   yHi = Math.min(sy - 2, yHi + 1);
   if (yHi < yLo) return { solid: solid.build(), water: water.build(), cross: cross.build() };
 
+  // Meshed cells per axis: the padding (and the light margin rows) are only read.
+  const lo: readonly number[] = [1, yLo, 1 + margin], hi: readonly number[] = [sx - 2, yHi, sz - 2 - margin];
   const su = Math.max(sx, sy, sz);
-  const mask = new Int32Array(su * su);
-  const co = [0, 0, 0];
-  const p = new Array<number>(12), uv = new Array<number>(8), pk = new Array<number>(4), ao = [0, 0, 0, 0];
+  // Greedy mask: material key (layer, ao, flags, kind) and the corner light (4 x sky, 4 x block, 6 bits each).
+  const mask = new Int32Array(su * su), maskSky = new Int32Array(su * su), maskBlock = new Int32Array(su * su);
+  const p = new Array<number>(12), uv = new Array<number>(8), pk = new Array<number>(4), ao = [0, 0, 0, 0], lt = [0, 0, 0, 0];
 
   for (let a = 0; a < 3; a++) {
     const [pu, pv] = PLANE[a]!;
-    const nu = dims[pu], nv = dims[pv];
     for (const s of [1, -1] as const) {
       const face = a * 2 + (s > 0 ? 0 : 1);
-      const cLo = a === 1 ? yLo : 1, cHi = a === 1 ? yHi : dims[a]! - 2;
-      for (let c = cLo; c <= cHi; c++) {
-        mask.fill(0, 0, nu * nv);
-        const vLo = pv === 1 ? yLo : 1, vHi = pv === 1 ? yHi : nv - 2;
+      const nu = dims[pu];
+      const uLo = lo[pu]!, uHi = hi[pu]!, vLo = lo[pv]!, vHi = hi[pv]!;
+      for (let c = lo[a]!; c <= hi[a]!; c++) {
+        mask.fill(0, 0, nu * dims[pv]!);
         let any = false;
         for (let v = vLo; v <= vHi; v++) {
-          for (let u = 1; u < nu - 1; u++) {
+          for (let u = uLo; u <= uHi; u++) {
             const pos = c * stride[a]! + u * stride[pu]! + v * stride[pv]!;
             const id = data[pos]!;
             if (id === 0) continue;
@@ -175,45 +161,53 @@ export function meshVolume(vol: Volume, extra: readonly [number, number, number]
             const nb = data[pos + s * stride[a]!]!;
             let visible: boolean;
             if (id === B.water) visible = a === 1 && s > 0 && nb !== B.water && !OPAQUE[nb];
-            else if (id === B.lava) visible = nb !== B.lava && !OPAQUE[nb];
+            else if (isLava(id)) visible = !isLava(nb) && !OPAQUE[nb];
             else visible = !OPAQUE[nb];
             if (!visible) continue;
-            co[a] = c; co[pu] = u; co[pv] = v;
             const front = pos + s * stride[a]!;
-            const light = lightAt(co[0]! + (a === 0 ? s : 0), co[1]! + (a === 1 ? s : 0), co[2]! + (a === 2 ? s : 0));
-            // Ambient occlusion of the 4 corners of the face, from the cells around the front cell.
+            // Ambient occlusion and smooth light of the 4 corners of the face, from the cells around the front cell.
+            let sky = 0, blk = 0;
             for (let k = 0; k < 4; k++) {
               const du = CORNERS[k]![0] ? 1 : -1, dv = CORNERS[k]![1] ? 1 : -1;
-              const s1 = solidAt(front + du * stride[pu]), s2 = solidAt(front + dv * stride[pv]);
-              const cc = solidAt(front + du * stride[pu] + dv * stride[pv]);
+              const i1 = front + du * stride[pu], i2 = front + dv * stride[pv], id2 = i1 + dv * stride[pv];
+              const s1 = solidAt(i1), s2 = solidAt(i2), cc = solidAt(id2);
               ao[k] = s1 && s2 ? 0 : 3 - (s1 + s2 + cc);
+              const l = cornerLight(front, i1, i2, id2);
+              sky |= (l & 63) << (6 * k);
+              blk |= (l >> 6) << (6 * k);
             }
-            let flags = info.flags | (blockLight[front]! << 6);
+            let flags = info.flags;
             if (id === B.grass && face !== 2) flags &= ~FLAG.tintMask; // only the top of a grass block is tinted
             const layer = info.faces[face]!;
-            mask[v * nu + u] = layer | (ao[0]! | (ao[1]! << 2) | (ao[2]! << 4) | (ao[3]! << 6)) << 8 | light << 16 | flags << 19 | 1 << 26 | (id === B.water ? 1 << 27 : 0);
+            const m = v * nu + u;
+            mask[m] = layer | (ao[0]! | (ao[1]! << 2) | (ao[2]! << 4) | (ao[3]! << 6)) << 8 | flags << 16 | 1 << 26 | (id === B.water ? 1 << 27 : 0);
+            maskSky[m] = sky;
+            maskBlock[m] = blk;
             any = true;
           }
         }
         if (!any) continue;
         for (let v = vLo; v <= vHi; v++) {
-          for (let u = 1; u < nu - 1; u++) {
-            const key = mask[v * nu + u]!;
+          for (let u = uLo; u <= uHi; u++) {
+            const m = v * nu + u;
+            const key = mask[m]!;
             if (key === 0) continue;
-            const aoBits = (key >> 8) & 255;
-            const flat = aoBits % 85 === 0; // all four corners equal: the quad can grow
+            const aoBits = (key >> 8) & 255, sky = maskSky[m]!, blk = maskBlock[m]!;
+            // All four corners equal (occlusion and both lights): the quad can grow over equal neighbours.
+            const flat = aoBits % 85 === 0 && sky % 266305 === 0 && blk % 266305 === 0;
+            const same = (j: number) => mask[j] === key && maskSky[j] === sky && maskBlock[j] === blk;
             let w = 1, h = 1;
             if (flat) {
-              while (u + w < nu - 1 && mask[v * nu + u + w] === key) w++;
+              while (u + w <= uHi && same(m + w)) w++;
               grow: for (;;) {
                 if (v + h > vHi) break;
-                for (let t = 0; t < w; t++) if (mask[(v + h) * nu + u + t] !== key) break grow;
+                for (let t = 0; t < w; t++) if (!same((v + h) * nu + u + t)) break grow;
                 h++;
               }
             }
             for (let dv = 0; dv < h; dv++) for (let du = 0; du < w; du++) mask[(v + dv) * nu + u + du] = 0;
 
-            const layer = key & 255, light = (key >> 16) & 7, flags = (key >> 19) & 127;
+            const layer = key & 255, flags = (key >> 16) & 127;
             const q = a * 2 + (s > 0 ? 0 : 1);
             const plane = origin[a]! + c + (s > 0 ? 1 : 0);
             const u0 = origin[pu] + u, u1 = u0 + w, v0 = origin[pv] + v, v1 = v0 + h;
@@ -224,9 +218,12 @@ export function meshVolume(vol: Volume, extra: readonly [number, number, number]
               p[k * 3 + pv] = dv ? v1 : v0;
               uv[k * 2] = du ? w : 0;
               uv[k * 2 + 1] = dv ? h : 0;
-              pk[k] = q + PACK.ao * ((aoBits >> (2 * k)) & 3) + PACK.light * light + PACK.flags * flags;
+              const ls = (sky >> (6 * k)) & 63, lb = (blk >> (6 * k)) & 63;
+              pk[k] = q + PACK.ao * ((aoBits >> (2 * k)) & 3) + PACK.sky * ls + PACK.block * lb + PACK.flags * flags;
+              lt[k] = 3 * ((aoBits >> (2 * k)) & 3) + Math.max(ls, lb) / 4;
             }
-            const a0 = aoBits & 3, a1 = (aoBits >> 2) & 3, a2 = (aoBits >> 4) & 3, a3 = (aoBits >> 6) & 3;
+            // Split the quad along the diagonal whose corners are the most alike, so the shading does not show a crease.
+            const [a0, a1, a2, a3] = lt as [number, number, number, number];
             const reverse = SIGMA[a] !== s;
             const target = key & (1 << 27) ? water : solid;
             if (target === water) for (let k = 0; k < 4; k++) p[k * 3 + 1]! -= WATER_DROP;
@@ -239,16 +236,17 @@ export function meshVolume(vol: Volume, extra: readonly [number, number, number]
 
   // Non-cube shapes: one pass over the inner cells.
   for (let y = 1; y < sy - 1; y++) {
-    for (let z = 1; z < sz - 1; z++) {
+    for (let z = 1 + margin; z < sz - 1 - margin; z++) {
       for (let x = 1; x < sx - 1; x++) {
-        const id = data[x + sx * (z + sz * y)]!;
+        const cell = x + sx * (z + sz * y);
+        const id = data[cell]!;
         if (id === 0) continue;
         const info = BLOCKS[id];
         if (!info || info.shape === Shape.Cube || info.shape === Shape.None) continue;
-        const light = lightAt(x, y, z);
         const wx = origin[0] + x, wy = origin[1] + y, wz = origin[2] + z;
+        // Thin shapes take the light of their own cell (they do not block it).
         const layer = info.faces[2]!;
-        const base = 3 * PACK.ao + PACK.light * light + PACK.flags * info.flags;
+        const base = 3 * PACK.ao + PACK.sky * 4 * light.sky[cell]! + PACK.block * 4 * light.block[cell]! + PACK.flags * info.flags;
         const all = (face: number) => [base + face, base + face, base + face, base + face];
         switch (info.shape) {
           case Shape.Cross: {
@@ -258,9 +256,16 @@ export function meshVolume(vol: Volume, extra: readonly [number, number, number]
             }
             break;
           }
-          case Shape.Rail:
-            cross.quad([wx, wy + 0.06, wz, wx + 1, wy + 0.06, wz, wx + 1, wy + 0.06, wz + 1, wx, wy + 0.06, wz + 1], [0, 0, 1, 0, 1, 1, 0, 1], layer, all(2), false, false);
+          case Shape.Rail: {
+            // As in the block game (models/block/template_rail_raised_*.json): a rail with another rail one layer up in
+            // the next cell along the track (z) is the flat rail tilted 45 degrees and stretched, rising one block over its
+            // cell from 1/16 to 1 + 1/16, so both ends meet the flat rails of the two levels. Toward -z first if both.
+            const railAt = (dz: number) => BLOCKS[data[cell + sx * dz + sx * sz]!]?.shape === Shape.Rail;
+            const up = railAt(-1) ? -1 : railAt(1) ? 1 : 0;
+            const y0 = wy + RAIL_LIFT + (up < 0 ? 1 : 0), y1 = wy + RAIL_LIFT + (up > 0 ? 1 : 0);
+            cross.quad([wx, y0, wz, wx + 1, y0, wz, wx + 1, y1, wz + 1, wx, y1, wz + 1], [0, 0, 1, 0, 1, 1, 0, 1], layer, all(2), false, false);
             break;
+          }
           case Shape.Pane:
             cross.quad([wx, wy, wz + 0.5, wx + 1, wy, wz + 0.5, wx + 1, wy + 1, wz + 0.5, wx, wy + 1, wz + 0.5], [0, 0, 1, 0, 1, 1, 0, 1], layer, all(4), false, false);
             break;
