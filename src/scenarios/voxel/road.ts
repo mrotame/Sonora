@@ -8,6 +8,7 @@
 //     mountain that rises around it there (chunk.ts); the centre of the map has no other mountains, so no tunnels.
 // The profile is a pure function of the world's terrain salts and the distance d, cached per chunk, and is the single
 // source for both the camera (`bridgeOffsetAt`) and the segment generator (`profileAt`).
+import { B } from './blocks.ts';
 import { caveRangeAt } from './caveMask.ts';
 import { columnAt, TERRAIN, type TerrainSalts } from './terrain.ts';
 
@@ -150,6 +151,17 @@ export function bridgeOffsetAt(t: TerrainSalts, d: number): number {
 /** Rise over run of the arch at distance d. */
 export function bridgeSlopeAt(t: TerrainSalts, d: number): number {
   return (bridgeOffsetAt(t, d + 1) - bridgeOffsetAt(t, d - 1)) / 2;
+}
+
+/**
+ * Block of a bridge deck row from the deck layers of the row behind (`prev`), itself (`dl`) and the row ahead (`next`):
+ * an oak stair, its high half toward the higher neighbour, where the deck is one layer above the lower neighbour and the
+ * other neighbour is not lower (so the top of the stair meets the next row); null (planks) elsewhere.
+ */
+export function deckStairAt(prev: number, dl: number, next: number): typeof B.oakStairsAhead | typeof B.oakStairsBehind | null {
+  if (prev === dl - 1 && next >= dl) return B.oakStairsAhead;
+  if (next === dl - 1 && prev >= dl) return B.oakStairsBehind;
+  return null;
 }
 
 /** Layer of the road blocks (the deck) at block row bd. */

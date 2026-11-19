@@ -2,8 +2,9 @@
 // The music's section intensity (about 3 s of smoothing, centered so it adds no lag) is read at three levels, each with
 // hysteresis: calm passages ride the open road, medium ones go through a cave section inside a mountain, and intense
 // ones take the camera through a portal into the Nether, which always opens inside a cave (open -> caves -> Nether ->
-// caves -> open). Time of day starts at dawn; every exit from the Nether leaves the world at a later hour, and the last
-// exit is at night. Everything is a pure function of the timeline, memoized per timeline.
+// caves -> open). Time of day starts at dawn; every exit from the Nether leaves the world at a later hour: the last exit
+// is at night, the one before it at sunset, earlier ones from morning to afternoon. Without a visit the day runs from
+// dawn to midnight. Everything is a pure function of the timeline, memoized per timeline.
 import type { Timeline } from '../../audio/intelligence/timeline.ts';
 import { intensityCurves } from './path.ts';
 
@@ -29,12 +30,19 @@ export const SCHEDULE = {
   firstCaveS: 3,
   /** Caves and the Nether are closed this long (s) before the music ends: the epilogue is always on the open road. */
   endMarginS: 2,
-  /** Hours: dawn at the start, the first and last exit hours (the last is at night). */
+  /**
+   * Exit hours, counted from the last visit (user-requested): the last exit is at night, the one before it at sunset
+   * (golden hour; the overworld drift then carries it to the orange peak near 18.5 h), and any earlier ones spread
+   * evenly from morning to afternoon (a single earlier one at noon).
+   */
   startHour: 6.5,
   firstExitHour: 9,
+  midExitHour: 12,
+  lastDayExitHour: 15,
+  sunsetExitHour: 17.5,
   lastExitHour: 21,
-  /** Without any Nether visit the day only advances to this hour over the music. */
-  idleEndHour: 12,
+  /** Without any Nether visit the day runs from dawn to midnight over the music. */
+  idleEndHour: 24,
   /** Share of the hours to the next exit that the overworld advances while the camera stays there. */
   driftShare: 0.3,
 } as const;
@@ -80,6 +88,17 @@ function hysteresis(curve: Float64Array, rate: number, enter: number, exit: numb
   return out;
 }
 
+/** Hour right after exit k of n visits: night for the last, sunset for the one before, the day spread over the rest. */
+export function exitHourOf(k: number, n: number): number {
+  const S = SCHEDULE;
+  const fromEnd = n - 1 - k;
+  if (fromEnd === 0) return S.lastExitHour;
+  if (fromEnd === 1) return S.sunsetExitHour;
+  const m = n - 2; // exits before the sunset one
+  if (m === 1) return S.midExitHour;
+  return S.firstExitHour + ((S.lastDayExitHour - S.firstExitHour) * k) / (m - 1);
+}
+
 const cache = new WeakMap<Timeline, Schedule>();
 
 export function scheduleOf(timeline: Timeline): Schedule {
@@ -109,12 +128,7 @@ export function scheduleOf(timeline: Timeline): Schedule {
   }
   const caves = merged.filter(([a, b]) => b - a >= S.minCaveS || nether.some(([c, d]) => c >= a && d <= b)).map(([t0, t1]) => ({ t0, t1 }));
 
-  const n = nether.length;
-  const intervals = nether.map(([t0, t1], k): Interval => ({
-    t0,
-    t1,
-    exitHour: n === 1 ? S.lastExitHour : S.firstExitHour + ((S.lastExitHour - S.firstExitHour) * k) / (n - 1),
-  }));
+  const intervals = nether.map(([t0, t1], k): Interval => ({ t0, t1, exitHour: exitHourOf(k, nether.length) }));
   const schedule = { intervals, caves, musicEndS };
   cache.set(timeline, schedule);
   return schedule;
@@ -132,7 +146,7 @@ export function caveAt(s: Schedule, t: number): Span | null {
   return null;
 }
 
-/** Hour of the day (0..24, may exceed 24 only never; it stops at the last exit hour) at track time t. */
+/** Hour of the day (0..24; with visits it stops at the last exit hour, without them it reaches midnight) at track time t. */
 export function hourAt(s: Schedule, t: number): number {
   const { intervals } = s;
   if (intervals.length === 0) {

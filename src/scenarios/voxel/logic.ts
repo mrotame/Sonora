@@ -195,7 +195,10 @@ export const voxelLogic: ScenarioLogic<VoxelParams, VoxelSegment> = {
   // visit is left without glowstone in view where the rock hides the high roofs.
   // 33: Nether rails in runs of 45 degree ramps with level stretches between them (rails.ts); the camera and the minecart
   // ride those blocks (the eye seated 1.4 m over the deck); the minecart is a box model posed on the rails.
-  version: 33,
+  // 34: exit hours counted from the last visit (night, then sunset, earlier ones from morning to afternoon); without a
+  // visit the day runs from dawn to midnight.
+  // 35: oak stairs where a bridge deck climbs or falls a layer (two half-block steps instead of a full-block jump).
+  version: 35,
   // `speed` is only the fallback for code without a path (tests); the real pace comes from createPath (see path.ts).
   // The detailed segments: 8 ahead (512 m = 32 chunks), 2 behind, 384 blocks (24 chunks) to each side (TERRAIN.halfWidth).
   // Beyond them the far field (far.ts) carries the terrain to the end of the fog; the far plane covers its corners.

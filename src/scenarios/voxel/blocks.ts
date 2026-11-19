@@ -38,10 +38,12 @@ export const B = {
   // Cave and Nether light blocks, never on the open road. Only the cave wall lamps and the Nether glowstone glow with the
   // music (see FLAG.energy); the cave ceiling glowstone and the Nether lava falls are steady.
   oakFence: 40, netherFence: 41, redstoneLamp: 42, caveLamp: 43, caveGlowstone: 44, netherGlowstone: 45, lavaFall: 46,
+  // Oak stairs of the bridge arch, named by the side of the high half along the road (rows d grow ahead of the camera).
+  oakStairsAhead: 47, oakStairsBehind: 48,
   rail: 50, poweredRail: 51,
 } as const;
 
-export const Shape = { None: 0, Cube: 1, Cross: 2, Fence: 3, Pane: 4, Rail: 5 } as const;
+export const Shape = { None: 0, Cube: 1, Cross: 2, Fence: 3, Pane: 4, Rail: 5, Stairs: 6 } as const;
 export type Shape = (typeof Shape)[keyof typeof Shape];
 
 /** Tint of a gray texture: 0 none, 1 grass, 2 oak foliage, 3 birch foliage. */
@@ -143,6 +145,8 @@ def(B.sugarCane, Shape.Cross, all(L.sugarCane), FLAG.cutout);
 def(B.fern, Shape.Cross, all(L.fern), Tint.Grass | FLAG.cutout);
 def(B.oakFence, Shape.Fence, all(L.oakPlanks));
 def(B.netherFence, Shape.Fence, all(L.netherBricks));
+def(B.oakStairsAhead, Shape.Stairs, all(L.oakPlanks));
+def(B.oakStairsBehind, Shape.Stairs, all(L.oakPlanks));
 def(B.rail, Shape.Rail, all(L.rail), FLAG.cutout);
 def(B.poweredRail, Shape.Rail, all(L.poweredRail), FLAG.cutout);
 

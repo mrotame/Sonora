@@ -6,7 +6,7 @@
 // the road, bx in -1..1, is centred on x = 0), block row bd along the travel axis (scene z = -bd - 1 .. -bd), layer y.
 import { B } from './blocks.ts';
 import type { Volume } from './mesher.ts';
-import { deckLayer, profileAt, ROAD, RoadKind } from './road.ts';
+import { deckLayer, deckStairAt, profileAt, ROAD, RoadKind } from './road.ts';
 import { baseColumnAt, cliffWeight, densityTop, groundBlock, naturalBlock, raiseCaveMountain, surfaceSlope, TERRAIN, type Column, type TerrainSalts } from './terrain.ts';
 import { hash01, lerp, perlin2, perlin3, smoothstep } from './noise.ts';
 import { caveRangeAt, caveWeight } from './caveMask.ts';
@@ -172,7 +172,10 @@ export function buildVolume(t: TerrainSalts, coreStart: number, coreLength: numb
     // Clear corridor.
     for (let bx = -ROAD.clearHalf; bx <= ROAD.clearHalf; bx++) for (let y = dl + 1; y <= dl + ROAD.clearHeight; y++) set(bx, y, bd, B.air);
     if (span) {
-      for (let bx = -ROAD.planksHalf; bx <= ROAD.planksHalf; bx++) set(bx, dl, bd, B.oakPlanks);
+      // Where the deck climbs or falls a layer, the planks become oak stairs (high half toward the higher row), so the
+      // step is two half-blocks instead of one full-block jump (scenario version 35, user-requested).
+      const stair = deckStairAt(deckLayer(profileAt(t, bd - 1).offset), dl, deckLayer(profileAt(t, bd + 1).offset));
+      for (let bx = -ROAD.planksHalf; bx <= ROAD.planksHalf; bx++) set(bx, dl, bd, stair ?? B.oakPlanks);
       for (const s of [-1, 1]) {
         set(s * ROAD.deckHalf, dl, bd, B.cobblestone);
         set(s * ROAD.deckHalf, dl + 1, bd, B.oakFence);

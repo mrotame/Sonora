@@ -13,8 +13,8 @@ import { PACK, RAIL_LIFT, meshVolume } from '../src/scenarios/voxel/mesher.ts';
 import { BEATS, bassBeatTimes, beatTimes, beatsUpTo } from '../src/scenarios/voxel/beats.ts';
 import { cavePulse, pulseAt } from '../src/scenarios/voxel/cavePulse.ts';
 import { LIGHT_REACH, computeLight } from '../src/scenarios/voxel/light.ts';
-import { ROAD, ROAD_SURFACE_Y, RoadKind, bridgeOffsetAt, bridgeSlopeAt, deckLayer, profileAt } from '../src/scenarios/voxel/road.ts';
-import { SCHEDULE, caveAt, hourAt, netherAt, scheduleOf } from '../src/scenarios/voxel/schedule.ts';
+import { ROAD, ROAD_SURFACE_Y, RoadKind, bridgeOffsetAt, bridgeSlopeAt, deckLayer, deckStairAt, profileAt } from '../src/scenarios/voxel/road.ts';
+import { SCHEDULE, caveAt, exitHourOf, hourAt, netherAt, scheduleOf } from '../src/scenarios/voxel/schedule.ts';
 import { NETHER, buildNetherVolume, railDeckLayer } from '../src/scenarios/voxel/nether.ts';
 import { POSTS, isPostRow, netherPostRows, postExitTime } from '../src/scenarios/voxel/netherPosts.ts';
 import { OPAQUE } from '../src/scenarios/voxel/blocks.ts';
@@ -210,16 +210,28 @@ test('voxel schedule: one intense passage gives one Nether visit, entered while 
   assert.ok(netherAt(s, (iv.t0 + iv.t1) / 2) !== null && netherAt(s, 5) === null && netherAt(s, iv.t1 + 1) === null);
 });
 
-test('voxel schedule: several visits spread the exit hours, ending at night; none keeps the day short', () => {
+test('voxel schedule: several visits end at sunset then night, earlier exits at noon or spread over the day', () => {
   const tl = track([[15, 30], [45, 60], [75, 90]], 110);
   const s = scheduleOf(tl);
   assert.equal(s.intervals.length, 3);
   const hours = s.intervals.map((i) => i.exitHour);
-  assert.deepEqual(hours, [9, 15, 21]);
+  assert.deepEqual(hours, [SCHEDULE.midExitHour, SCHEDULE.sunsetExitHour, SCHEDULE.lastExitHour]);
   assert.ok(s.intervals.every((iv, k) => k === 0 || iv.t0 - s.intervals[k - 1]!.t1 >= SCHEDULE.minOverworldS));
+  const hoursOf = (n: number) => Array.from({ length: n }, (_, k) => exitHourOf(k, n));
+  assert.deepEqual(hoursOf(1), [21]);
+  assert.deepEqual(hoursOf(2), [17.5, 21]);
+  assert.deepEqual(hoursOf(3), [12, 17.5, 21]);
+  assert.deepEqual(hoursOf(4), [9, 15, 17.5, 21]);
+  assert.deepEqual(hoursOf(5), [9, 12, 15, 17.5, 21]);
+  assert.deepEqual(hoursOf(6), [9, 11, 13, 15, 17.5, 21]);
+});
+
+test('voxel schedule: without a Nether visit the day runs from dawn to midnight', () => {
   const calm = scheduleOf(track([], 60));
   assert.equal(calm.intervals.length, 0);
-  assert.ok(hourAt(calm, 60) <= SCHEDULE.idleEndHour + 1e-9 && hourAt(calm, 60) > SCHEDULE.startHour);
+  assert.equal(hourAt(calm, 0), SCHEDULE.startHour);
+  assert.ok(Math.abs(hourAt(calm, calm.musicEndS) - 24) < 1e-9);
+  assert.ok(hourAt(calm, calm.musicEndS / 2) > 12 && hourAt(calm, calm.musicEndS / 2) < 18);
 });
 
 test('voxel schedule: music that ends intense leaves the Nether before the end', () => {
@@ -1152,6 +1164,31 @@ test('voxel road: the deck never skips a step, not even where a bridge meets a c
     for (const [a, b] of t.caves.ranges) for (const edge of [a - 1, b]) if (profileAt(t, edge).kind === RoadKind.Bridge) mouths++;
   }
   assert.ok(mouths > 0, 'some bridge meets a cave mouth');
+});
+
+test('voxel road: bridge decks climb and fall on oak stairs (high half toward the higher row), planks on the level', () => {
+  assert.equal(deckStairAt(4, 5, 6), B.oakStairsAhead);
+  assert.equal(deckStairAt(6, 5, 4), B.oakStairsBehind);
+  assert.equal(deckStairAt(5, 5, 5), null);
+  assert.equal(deckStairAt(4, 5, 4), null, 'the crest stays planks');
+  const tl = track([[20, 45]], 80);
+  let stairs = 0;
+  for (const k of 'abcdefgh') {
+    const t = voxelTerrain(tl, seedOf(k));
+    for (let s = -1; s < 6; s++) {
+      const { volume: v } = buildVolume(t, s * L, L);
+      for (let bd = s * L; bd < (s + 1) * L; bd++) {
+        const p = profileAt(t, bd);
+        if (p.kind !== RoadKind.Bridge && p.kind !== RoadKind.Causeway) continue;
+        const dl = deckLayer(p.offset);
+        const want = deckStairAt(deckLayer(profileAt(t, bd - 1).offset), dl, deckLayer(profileAt(t, bd + 1).offset));
+        const got = v.data[(0 - v.ox) + v.sx * ((-bd - 1 - v.oz) + v.sz * (dl - v.oy))]!;
+        assert.equal(got, want ?? B.oakPlanks, `seed ${k} row ${bd}`);
+        if (want !== null) stairs++;
+      }
+    }
+  }
+  assert.ok(stairs > 0, 'some bridge has stairs');
 });
 
 test('voxel camera: the view stays level on steps, bridges and Nether ramps, and the Nether posts assume the same camera', () => {

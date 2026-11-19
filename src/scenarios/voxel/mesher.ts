@@ -269,6 +269,13 @@ export function meshVolume(vol: Volume, extra: readonly [number, number, number]
           case Shape.Pane:
             cross.quad([wx, wy, wz + 0.5, wx + 1, wy, wz + 0.5, wx + 1, wy + 1, wz + 0.5, wx, wy + 1, wz + 0.5], [0, 0, 1, 0, 1, 1, 0, 1], layer, all(4), false, false);
             break;
+          case Shape.Stairs: {
+            // A bottom half-slab plus a half-depth upper step on the high side (rows d grow with -z, so "ahead" is the -z half).
+            box(cross, wx, wy, wz, wx + 1, wy + 0.5, wz + 1, layer, base);
+            const ahead = id === B.oakStairsAhead;
+            box(cross, wx, wy + 0.5, ahead ? wz : wz + 0.5, wx + 1, wy + 1, ahead ? wz + 0.5 : wz + 1, layer, base);
+            break;
+          }
           case Shape.Fence: {
             const connects = (dx: number, dz: number) => {
               const nb = data[x + dx + sx * (z + dz + sz * y)]!;
