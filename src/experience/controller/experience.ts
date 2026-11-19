@@ -33,6 +33,10 @@ export interface ExperienceOptions {
 const MAX_PIXEL_RATIO = 2;
 /** Vertical field of view (degrees) when the scenario path does not set one. */
 const DEFAULT_FOV = 70;
+/** Mouse input is ignored for this long after pointer lock starts (spurious deltas while the cursor is recentered). */
+const LOCK_SETTLE_MS = 150;
+/** Largest per-event mouse delta accepted, in pixels; bigger ones are treated as browser glitches. */
+const MAX_MOUSE_DELTA_PX = 200;
 /** Fraction of the road slope angle the camera pitch follows (only for scenarios with a path), unless the scenario sets `pathTilt`. */
 const DEFAULT_PATH_TILT = 0.8;
 /** 0.5 (not 0.1) keeps depth precision usable when a scenario's view distance reaches kilometres. */
@@ -67,6 +71,8 @@ export class Experience {
   private statStart = 0;
   private resizeObserver: ResizeObserver | null = null;
   private lastPointer: { x: number; y: number } | null = null;
+  /** Mouse events before this timestamp (ms, event clock) are ignored: right after pointer lock the browser emits bogus deltas. */
+  private ignoreMouseUntil = 0;
 
   constructor(opts: ExperienceOptions) {
     this.opts = opts;
@@ -123,6 +129,7 @@ export class Experience {
     canvas.addEventListener('pointerup', this.onPointerUp);
     canvas.addEventListener('pointercancel', this.onPointerUp);
     canvas.addEventListener('pointerleave', this.onPointerUp);
+    document.addEventListener('pointerlockchange', this.onPointerLockChange);
   }
 
   private readonly interpretSeed: Seed;
@@ -239,10 +246,21 @@ export class Experience {
     if (document.pointerLockElement === canvas) return;
     try {
       // Rejects (or returns void on old browsers) if not allowed, e.g. right after ESC; a later click retries.
-      const result = canvas.requestPointerLock() as Promise<void> | undefined;
-      result?.catch(() => { /* not allowed now; the user can click again */ });
+      const result = canvas.requestPointerLock({ unadjustedMovement: true }) as Promise<void> | undefined;
+      result?.catch(() => {
+        // Raw movement unsupported (or not allowed now): retry with the default lock; a later click retries otherwise.
+        if (document.pointerLockElement === canvas) return;
+        try {
+          (canvas.requestPointerLock() as Promise<void> | undefined)?.catch(() => { /* the user can click again */ });
+        } catch { /* unsupported */ }
+      });
     } catch { /* unsupported */ }
   }
+
+  /** On lock, drop the first moments of mouse input: the browser recenters the cursor and may report spurious deltas. */
+  private readonly onPointerLockChange = (): void => {
+    if (document.pointerLockElement === this.opts.canvas) this.ignoreMouseUntil = performance.now() + LOCK_SETTLE_MS;
+  };
 
   private readonly onPointerDown = (e: PointerEvent): void => {
     if (e.pointerType === 'mouse') {
@@ -260,6 +278,9 @@ export class Experience {
     if (e.pointerType === 'mouse') {
       // Only a locked mouse controls the camera.
       if (document.pointerLockElement !== this.opts.canvas) return;
+      if (e.timeStamp < this.ignoreMouseUntil) return;
+      // A single event larger than a human can produce is a browser glitch, not input.
+      if (Math.abs(e.movementX) > MAX_MOUSE_DELTA_PX || Math.abs(e.movementY) > MAX_MOUSE_DELTA_PX) return;
       this.look.addInput(e.movementX, e.movementY, e.timeStamp / 1000);
       return;
     }
@@ -293,6 +314,7 @@ export class Experience {
     canvas.removeEventListener('pointerup', this.onPointerUp);
     canvas.removeEventListener('pointercancel', this.onPointerUp);
     canvas.removeEventListener('pointerleave', this.onPointerUp);
+    document.removeEventListener('pointerlockchange', this.onPointerLockChange);
     if (this.source) {
       this.source.onended = null;
       try { this.source.stop(); } catch { /* already stopped */ }
