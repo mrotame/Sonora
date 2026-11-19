@@ -6,6 +6,16 @@ The idea goes beyond an audio visualizer or equalizer. The music shapes the worl
 
 > A personal portfolio project, under development. Not a commercial product.
 
+**Live site: [https://mrotame.github.io/sonora/](https://mrotame.github.io/sonora/)**
+
+The frontend is hosted on **GitHub Pages**. The audio backend runs separately on Google Cloud Run (see [DEPLOYMENT.md](docs/DEPLOYMENT.md)).
+
+## Screenshots
+
+| Synthwave Dimension | Voxel Dreamscape: Overworld | Voxel Dreamscape: Nether |
+|---|---|---|
+| ![Synthwave Dimension](src/home/img/synthwave.webp) | ![Voxel Dreamscape, Overworld](src/home/img/overworld.webp) | ![Voxel Dreamscape, Nether](src/home/img/nether.webp) |
+
 ## How it works
 
 1. You paste the URL of a public YouTube video and choose a scenario.
@@ -22,7 +32,7 @@ There is no pause, seek, or other playback control in the current version.
 |---|---|
 | **Voxel Dreamscape** | A surreal voxel world with cubic structures, floating blocks, and a colorful atmosphere. |
 | **Synthwave Dimension** | A retro-futuristic environment with stylized mountains, luminous grids, and a synthwave horizon. The camera speed and the road's elevation follow the pace of the music. |
-| **Cybernetic Corridor** | A dark, dense industrial corridor with metallic architecture and directional lighting. |
+| **Cybernetic Corridor** | A dark, dense industrial corridor with metallic architecture and directional lighting. *Planned, not implemented yet: the app currently ships the two scenarios above.* |
 
 The names are provisional. The concept art references are in [docs/](docs/).
 
@@ -40,7 +50,7 @@ Numeric differences in decoding between browsers or devices may slightly change 
 - Three.js (WebGL 2, GLSL ES 3.00)
 - Web Audio API for decoding
 - In-house audio analysis written in TypeScript, running in a Web Worker
-- Node.js + TypeScript backend that uses [yt-dlp](https://github.com/yt-dlp/yt-dlp) only to obtain and deliver the audio
+- Node.js + TypeScript backend that only obtains and delivers the audio: through third-party RapidAPI providers in production (ADR 0012) and [yt-dlp](https://github.com/yt-dlp/yt-dlp) locally or when no `RAPIDAPI_KEY` is set
 
 All analysis, procedural generation, and rendering happen on the user's device. The backend does not analyze music or store music data.
 
@@ -81,4 +91,4 @@ Audio is obtained using unofficial YouTube media-extraction techniques. This is 
 
 ## Credits
 
-Voxel Dreamscape uses 43 unmodified textures from the **Faithful 32x** resource pack (version 26.3) by the Faithful team: [https://faithfulpack.net](https://faithfulpack.net). The textures are `grass_block_top`, `grass_block_side`, `dirt`, `stone`, `cobblestone`, `sand`, `gravel`, `coal_ore`, `iron_ore`, `oak_log`, `oak_log_top`, `oak_leaves`, `oak_planks`, `birch_log`, `birch_log_top`, `birch_leaves`, `glowstone`, `obsidian`, `crying_obsidian`, `amethyst_block`, `purpur_block`, `netherrack`, `nether_bricks`, `soul_sand`, `nether_quartz_ore`, `short_grass`, `dandelion`, `poppy`, `sugar_cane`, `rail`, `powered_rail`, `snow`, `andesite`, `tuff`, `coarse_dirt`, `redstone_lamp_on`, `sun`, `moon`, `magma`, `lava_still`, `water_still`, `nether_portal` and `minecart` (the sun, moon and minecart are scaled or mapped at load time). They are in [src/scenarios/voxel/textures/](src/scenarios/voxel/textures/) and are distributed under the [Faithful License](https://faithfulpack.net/license). A copy of the license is in [LICENSE.txt](src/scenarios/voxel/textures/LICENSE.txt). They are not part of Sonora's own code and are not covered by its license.
+Voxel Dreamscape uses 47 unmodified textures from the **Faithful 32x** resource pack (version 26.3) by the Faithful team: [https://faithfulpack.net](https://faithfulpack.net). The textures are `grass_block_top`, `grass_block_side`, `dirt`, `stone`, `cobblestone`, `sand`, `gravel`, `coal_ore`, `iron_ore`, `oak_log`, `oak_log_top`, `oak_leaves`, `oak_planks`, `birch_log`, `birch_log_top`, `birch_leaves`, `glowstone`, `obsidian`, `crying_obsidian`, `amethyst_block`, `purpur_block`, `netherrack`, `nether_bricks`, `soul_sand`, `nether_quartz_ore`, `short_grass`, `fern`, `spruce_log`, `spruce_log_top`, `spruce_leaves`, `dandelion`, `poppy`, `sugar_cane`, `rail`, `powered_rail`, `snow`, `andesite`, `tuff`, `coarse_dirt`, `redstone_lamp_on`, `sun`, `moon`, `magma`, `lava_still`, `water_still`, `nether_portal` and `minecart` (the sun, moon and minecart are scaled or mapped at load time). They are in [src/scenarios/voxel/textures/](src/scenarios/voxel/textures/) and are distributed under the [Faithful License](https://faithfulpack.net/license). A copy of the license is in [LICENSE.txt](src/scenarios/voxel/textures/LICENSE.txt). They are not part of Sonora's own code and are not covered by its license.

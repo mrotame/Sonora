@@ -43,7 +43,7 @@ missing information is necessary to proceed reliably.
 - **Required:** No
 - **Type:** string
 - **Allowed values:** Any descriptive human-readable name.
-- **Examples:** `Voxel Dreamscape`, `Cybernetic Cosmos`.
+- **Examples:** `Voxel Dreamscape`, `Cybernetic Corridor`.
 - **Default:** Derive from `scenario_id` or ask the user if the intended
   identity is unclear.
 - **Behavior:** Defines the display name of the scenario.

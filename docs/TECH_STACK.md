@@ -190,7 +190,7 @@ The initial 3D rendering stack is:
 - Custom shaders must target GLSL ES 3.00 for the WebGL 2 baseline.
 - WebGPU-specific renderer behavior, TSL migration, and WebGPU compatibility are future evaluation topics, not current implementation requirements.
 - Browser/device support and WebGL 2 context availability must be validated as part of the MVP's compatibility and performance work.
-- Exact Three.js version and any post-processing dependency remain open implementation choices.
+- Installed version (2026-11-18): Three.js 0.187, pinned by `package-lock.json`. No post-processing library is used: Voxel Dreamscape's post-processing is written in-house (`voxel/post.ts`).
 
 ---
 
@@ -257,6 +257,7 @@ Sonora needs reactive features (RMS, bands, spectrum, transients), rhythmic data
 
 - **Status:** DECIDED
 - **Decision date:** 2026-11-15
+- **Amended:** 2026-11-16 by ADR 0012 (production acquisition goes through RapidAPI providers; yt-dlp remains the local and fallback extractor)
 
 ## Context
 
@@ -322,9 +323,8 @@ The identity was defined as SHA-256 over canonical PCM produced by `decodeAudioD
 
 # ADR 0010 - Local Audio Cache in IndexedDB
 
-## Status
-
-Accepted. Revises the earlier no-persistence rule for the audio file only.
+- **Status:** DECIDED
+- **Revises:** the earlier no-persistence rule, for the audio file only.
 
 ## Context
 
